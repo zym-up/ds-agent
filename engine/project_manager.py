@@ -153,3 +153,75 @@ class ProjectManager:
         meta["updated_at"] = datetime.now().isoformat()
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    def add_data(self, project_id: str, file_path: str) -> str:
+        """保存为新数据文件，后续可通过 merge_selected_data 合并。返回存储路径。"""
+        pdir = self.projects_dir / project_id / "data"
+        pdir.mkdir(parents=True, exist_ok=True)
+        existing_files = list(pdir.glob("data_*.csv"))
+        new_index = len(existing_files) + 1
+        dest = pdir / f"data_{new_index}.csv"
+        new_df = pd.read_csv(file_path) if file_path.endswith(".csv") else pd.read_excel(file_path)
+        new_df.to_csv(dest, index=False)
+        return str(dest)
+
+    def list_data_files(self, project_id: str) -> list:
+        """列出项目所有数据文件，返回 [{name, path, rows}]"""
+        pdir = self.projects_dir / project_id / "data"
+        if not pdir.exists():
+            return []
+        files = []
+        for f in sorted(pdir.glob("*.csv")):
+            df = pd.read_csv(f)
+            files.append({"name": f.name, "path": str(f), "rows": len(df)})
+        return files
+
+    def merge_selected_data(self, project_id: str, selected_files: list) -> "pd.DataFrame":
+        """按勾选文件名列表，合并数据（按列名匹配，按行拼接）"""
+        pdir = self.projects_dir / project_id / "data"
+        dfs = []
+        for fname in selected_files:
+            fpath = pdir / fname
+            if fpath.exists():
+                dfs.append(pd.read_csv(fpath))
+        if not dfs:
+            raise ValueError("没有找到选中的数据文件")
+        return pd.concat(dfs, ignore_index=True)
+
+    def list_reports(self, project_id: str) -> list:
+        """列出项目所有报告，返回 [{name, path, created_at}]"""
+        pdir = self.projects_dir / project_id / "reports"
+        reports = []
+        for f in sorted(pdir.glob("report_*.html"), reverse=True):
+            stat = f.stat()
+            reports.append({
+                "name": f.name,
+                "path": str(f),
+                "created_at": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            })
+        return reports
+
+    def get_project_info(self, project_id: str) -> dict:
+        """获取项目元信息"""
+        pdir = self.projects_dir / project_id
+        if not pdir.exists():
+            raise FileNotFoundError(f"项目 {project_id} 不存在")
+        with open(pdir / "meta.json", "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        data_files = self.list_data_files(project_id)
+        total_rows = sum(f["rows"] for f in data_files)
+        reports = self.list_reports(project_id)
+        state_path = pdir / "state.json"
+        steps_count = 0
+        if state_path.exists():
+            with open(state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+                steps_count = len(state.get("steps", []))
+        return {
+            "name": meta["name"],
+            "created_at": meta["created_at"],
+            "data_files_count": len(data_files),
+            "total_rows": total_rows,
+            "steps_count": steps_count,
+            "reports_count": len(reports),
+        }

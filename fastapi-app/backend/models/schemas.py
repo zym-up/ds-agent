@@ -25,4 +25,26 @@ class StepExecuteRequest(BaseModel):
 class GenerateReportRequest(BaseModel):
     project_id: str
     title: str
-    conclusion: str = ""
+    step_indices: list[int] = []
+    user_notes: str = ""
+    include_conclusion: bool = True
+
+
+class MergeDataRequest(BaseModel):
+    selected_files: list[str]
+
+
+class ConcludeRequest(BaseModel):
+    project_id: str
+    step_indices: list[int] = []
+    user_notes: str = ""
+
+
+class PlanStreamRequest(BaseModel):
+    project_id: str
+    user_input: str
+
+
+class ExecuteStreamRequest(BaseModel):
+    project_id: str
+    step_index: int

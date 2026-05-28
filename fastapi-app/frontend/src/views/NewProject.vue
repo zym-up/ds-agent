@@ -1,6 +1,12 @@
 <template>
   <div>
-    <h2>📂 数据上传</h2>
+    <h2>🆕 新建项目</h2>
+    <div v-if="projectStore.currentName" style="margin-bottom: 15px">
+      <el-tag type="info">当前项目: {{ projectStore.currentName }}</el-tag>
+    </div>
+
+    <el-input v-model="projectName" placeholder="输入项目名称..." style="width: 400px; margin-bottom: 16px" />
+
     <el-upload
       drag
       :auto-upload="false"
@@ -31,12 +37,15 @@
       </el-row>
 
       <div style="margin-top: 20px">
-        <el-input v-model="projectName" placeholder="项目名称" style="width: 300px" />
-        <el-button type="primary" @click="createProject" style="margin-left: 10px"
-                   :loading="creating">
-          创建分析项目
+        <el-button type="primary" @click="createProject" :loading="creating" :disabled="!projectName">
+          创建并开始分析
         </el-button>
+        <span v-if="!projectName" style="color: #999; margin-left: 10px; font-size: 13px">请先输入项目名称</span>
       </div>
+    </div>
+
+    <div v-if="!selectedFile" style="color: #999; margin-top: 10px; font-size: 13px">
+      请先上传数据文件（必须上传数据才能创建项目）
     </div>
   </div>
 </template>
@@ -51,24 +60,37 @@ import { ElMessage } from 'element-plus'
 const router = useRouter()
 const projectStore = useProjectStore()
 
+const projectName = ref('')
 const selectedFile = ref(null)
 const uploadResult = ref(null)
-const projectName = ref('')
 const creating = ref(false)
 
 const handleFileChange = async (file) => {
   selectedFile.value = file.raw
-  const res = await uploadData(file.raw)
-  uploadResult.value = res.data
-  projectName.value = file.name.replace(/\.[^.]+$/, '')
+  try {
+    const res = await uploadData(file.raw)
+    uploadResult.value = res.data
+    if (!projectName.value) {
+      projectName.value = file.name.replace(/\.[^.]+$/, '')
+    }
+  } catch (e) {
+    ElMessage.error('文件上传失败: ' + e.message)
+  }
 }
 
 const createProject = async () => {
+  if (!projectName.value || !selectedFile.value) return
   creating.value = true
   try {
     const res = await apiCreateProject(projectName.value, selectedFile.value)
-    projectStore.setProject(res.data.project_id, projectName.value, uploadResult.value)
-    ElMessage.success('项目创建成功')
+    projectStore.setProject(res.data.project_id, projectName.value)
+    projectStore.dataFiles = res.data.data_files || []
+    projectStore.selectedDataFiles = (res.data.data_files || []).map(f => f.name)
+    projectStore.setSteps([])
+    projectStore.chatHistory = []
+    projectStore.viewingStepIndex = -1
+    projectStore.reportPreviewMode = false
+    ElMessage.success('项目创建成功，正在进入分析对话...')
     router.push('/analysis')
   } catch (e) {
     ElMessage.error('创建失败: ' + e.message)

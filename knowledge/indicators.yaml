@@ -1,0 +1,35 @@
+# 汽车座椅面料感知质量 — 物理指标知识库
+拉伸强度:
+  unit: MPa
+  desc: 材料在断裂前能承受的最大拉应力，反映材料的强度特性
+  typical_range: [5, 50]
+  related_perception: 耐久感、结实感
+
+断裂伸长率:
+  unit: "%"
+  desc: 材料断裂时的伸长百分比，反映材料的延展性
+  typical_range: [10, 300]
+  related_perception: 弹性感
+
+撕裂强度:
+  unit: N/mm
+  desc: 材料抵抗撕裂的能力
+  typical_range: [10, 100]
+  related_perception: 耐用感
+
+摩擦系数:
+  unit: 无量纲
+  desc: 表面摩擦力与正压力的比值
+  typical_range: [0.2, 1.5]
+  related_perception: 滑爽感、柔软感
+
+压缩回弹率:
+  unit: "%"
+  desc: 压缩后恢复原状的能力
+  typical_range: [60, 95]
+  related_perception: 蓬松感、厚实感
+
+柔软度评分:
+  type: 主观评分 (1-10)
+  desc: 专家触感评价打分，分数越高越柔软
+  related_indicators: [摩擦系数, 压缩回弹率, 断裂伸长率]

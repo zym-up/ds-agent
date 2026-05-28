@@ -84,11 +84,11 @@ def show():
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("取消", use_container_width=True, key="report_cancel"):
+            if st.button("取消", width="stretch", key="report_cancel"):
                 st.rerun()
         with col2:
             btn_disabled = len(include_steps) == 0
-            if st.button("🤖 AI 结论并预览", type="primary", use_container_width=True,
+            if st.button("🤖 AI 结论并预览", type="primary", width="stretch",
                         disabled=btn_disabled, key="report_ai_preview"):
                 if include_steps and "agent" in st.session_state:
                     step_data = [{"type": s["type"], "explanation": s.get("llm_explanation", "")}
@@ -103,7 +103,7 @@ def show():
                 st.session_state.report_include_steps = include_steps
                 st.rerun()
         with col3:
-            if st.button("⬇ 导出 HTML", use_container_width=True, disabled=btn_disabled, key="report_export"):
+            if st.button("⬇ 导出 HTML", width="stretch", disabled=btn_disabled, key="report_export"):
                 sections = []
                 for s in include_steps:
                     chart_html = _load_chart_html(pm, project_id, s, all_steps)
@@ -145,10 +145,10 @@ def show():
     with col_btns:
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("📤 上传新数据", use_container_width=True, key="toolbar_upload"):
+            if st.button("📤 上传新数据", width="stretch", key="toolbar_upload"):
                 show_upload_dialog()
         with c2:
-            if st.button("📋 导出报告", type="primary", use_container_width=True, key="toolbar_report"):
+            if st.button("📋 导出报告", type="primary", width="stretch", key="toolbar_report"):
                 show_report_dialog()
 
     # --- 检查 show_upload_dialog flag ---
@@ -240,69 +240,76 @@ def show():
 
     with center_col:
         st.subheader("📈 结果")
-        steps = st.session_state.analysis_state.get("steps", [])
-        viewing_idx = st.session_state.get("viewing_step_index", -1)
+        result_container = st.container(height=520)
+        with result_container:
+            steps = st.session_state.analysis_state.get("steps", [])
+            viewing_idx = st.session_state.get("viewing_step_index", -1)
 
-        if viewing_idx >= 0 and viewing_idx < len(steps):
-            step = steps[viewing_idx]
-            if step.get("llm_explanation"):
-                with st.container(border=True):
-                    st.markdown(f"🤖 **AI 解读:** {step['llm_explanation']}")
-            if step.get("last_text"):
-                st.markdown(step["last_text"])
-            if step.get("last_charts"):
-                for chart in step["last_charts"]:
-                    st.plotly_chart(chart, use_container_width=True, key=f"hist_chart_{viewing_idx}")
-        elif "last_result" in st.session_state:
-            result = st.session_state.last_result
-            if result.get("llm_explanation"):
-                with st.container(border=True):
-                    st.markdown(f"🤖 **AI 解读:** {result['llm_explanation']}")
-            if result.get("text"):
-                st.markdown(result["text"])
-            if result.get("charts"):
-                for i, chart in enumerate(result["charts"]):
-                    st.plotly_chart(chart, use_container_width=True, key=f"curr_chart_{i}")
-            if result.get("dataframe") is not None:
-                st.dataframe(result["dataframe"], use_container_width=True)
-        else:
-            st.info("在对话区描述你的分析需求，Agent 将为你规划步骤。")
+            if viewing_idx >= 0 and viewing_idx < len(steps):
+                step = steps[viewing_idx]
+                if step.get("llm_explanation"):
+                    with st.container(border=True):
+                        st.markdown(f"🤖 **AI 解读:** {step['llm_explanation']}")
+                if step.get("last_text"):
+                    st.markdown(step["last_text"])
+                if step.get("last_charts"):
+                    for chart in step["last_charts"]:
+                        st.plotly_chart(chart, width="stretch", key=f"hist_chart_{viewing_idx}")
+            elif "last_result" in st.session_state:
+                result = st.session_state.last_result
+                if result.get("llm_explanation"):
+                    with st.container(border=True):
+                        st.markdown(f"🤖 **AI 解读:** {result['llm_explanation']}")
+                if result.get("text"):
+                    st.markdown(result["text"])
+                if result.get("charts"):
+                    for i, chart in enumerate(result["charts"]):
+                        st.plotly_chart(chart, width="stretch", key=f"curr_chart_{i}")
+                if result.get("dataframe") is not None:
+                    st.dataframe(result["dataframe"], width="stretch")
+            else:
+                st.info("在对话区描述你的分析需求，Agent 将为你规划步骤。")
 
     with right_col:
         st.subheader("📋 分析步骤")
-        steps = st.session_state.analysis_state.get("steps", [])
-        if not steps:
-            st.info("暂无分析步骤")
-            return
+        steps_container = st.container(height=520)
+        with steps_container:
+            steps = st.session_state.analysis_state.get("steps", [])
+            if not steps:
+                st.info("暂无分析步骤")
+            else:
+                _render_steps(steps, df, pm)
 
-        for i, step in enumerate(steps):
-            status = step.get("status", "pending")
-            status_icon = {"pending": "○", "running": "⟳", "done": "✓", "error": "✗"}
-            icon = status_icon.get(status, "○")
 
-            is_viewing = (i == st.session_state.viewing_step_index)
-            bg = "#e8f0fe" if is_viewing else "transparent"
-            border = "#1a73e8" if is_viewing else "#e0e0e0"
+def _render_steps(steps, df, pm):
+    for i, step in enumerate(steps):
+        status = step.get("status", "pending")
+        status_icon = {"pending": "○", "running": "⟳", "done": "✓", "error": "✗"}
+        icon = status_icon.get(status, "○")
 
-            st.markdown(
-                f"<div style='padding:6px 8px;margin:2px 0;border-left:3px solid {border};"
-                f"background:{bg};border-radius:4px;font-size:13px;'>"
-                f"{icon} <b>步骤 {i+1}</b>: {step['description'][:30]}...</div>",
-                unsafe_allow_html=True,
-            )
+        is_viewing = (i == st.session_state.viewing_step_index)
+        bg = "#e8f0fe" if is_viewing else "transparent"
+        border = "#1a73e8" if is_viewing else "#e0e0e0"
 
-            if status == "done" or status == "pending":
-                c_act, c_view = st.columns([1, 1])
-                with c_act:
-                    if status == "pending" and st.button("▶", key=f"run_{i}"):
-                        _execute_step(i, step, df, pm)
-                with c_view:
-                    if status == "done" and st.button("查看", key=f"view_{i}"):
-                        st.session_state.viewing_step_index = i
-                        st.rerun()
+        st.markdown(
+            f"<div style='padding:6px 8px;margin:2px 0;border-left:3px solid {border};"
+            f"background:{bg};border-radius:4px;font-size:13px;'>"
+            f"{icon} <b>步骤 {i+1}</b>: {step['description'][:30]}...</div>",
+            unsafe_allow_html=True,
+        )
 
-        if steps and all(s.get("status") == "done" for s in steps):
-            st.success("所有步骤已完成！点击「📋 导出报告」生成报告。")
+        if status == "done" or status == "pending":
+            c_act, c_view = st.columns([1, 1])
+            with c_act:
+                if status == "pending" and st.button("▶", key=f"run_{i}"):
+                    _execute_step(i, step, df, pm)
+            with c_view:
+                if status == "done" and st.button("查看", key=f"view_{i}"):
+                    st.session_state.viewing_step_index = i
+                    st.rerun()
+
+    if steps and all(s.get("status") == "done" for s in steps):
+        st.success("所有步骤已完成！点击「📋 导出报告」生成报告。")
 
 
 def _load_chart_html(pm, project_id, step, all_steps):
@@ -356,15 +363,17 @@ def _show_report_preview(pm, project_id):
 
     c_back, c_dl = st.columns(2)
     with c_back:
-        if st.button("← 返回分析", use_container_width=True):
+        if st.button("← 返回分析", width="stretch"):
             st.session_state.report_preview_mode = False
+            st.session_state.pop("preview_report_path", None)
             st.rerun()
     with c_dl:
-        report_path = pm.save_report(project_id, html)
-        with open(report_path, "r", encoding="utf-8") as f:
+        if "preview_report_path" not in st.session_state:
+            st.session_state.preview_report_path = pm.save_report(project_id, html)
+        with open(st.session_state.preview_report_path, "r", encoding="utf-8") as f:
             st.download_button(
                 "⬇ 下载 HTML", f.read(), f"{project_name}_report.html",
-                "text/html", use_container_width=True,
+                "text/html", width="stretch",
             )
 
 

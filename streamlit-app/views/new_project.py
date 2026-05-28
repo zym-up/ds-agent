@@ -25,7 +25,7 @@ def show():
         try:
             df = load_file(tmp_path)
             st.subheader("数据预览")
-            st.dataframe(df.head(50), use_container_width=True)
+            st.dataframe(df.head(50), width="stretch")
 
             info = get_data_info(df)
             col_a, col_b, col_c, col_d = st.columns(4)
@@ -49,6 +49,7 @@ def show():
 
                 st.session_state.project_id = project_id
                 st.session_state.project_name = project_name
+                st.session_state._switch_to_analysis = True
                 st.session_state.df = df
                 st.session_state.data_info = info
                 st.session_state.selected_data_files = ["original.csv"]

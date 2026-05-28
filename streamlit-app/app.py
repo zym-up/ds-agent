@@ -13,6 +13,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+from engine.project_manager import ProjectManager
+from views import new_project, analysis, settings
+
+
+@st.cache_resource
+def _get_pm():
+    return ProjectManager()
+
 
 def main():
     st.sidebar.title("📊 数据科学家 Agent")
@@ -22,24 +30,31 @@ def main():
         st.session_state.config = load_config()
 
     # --- 主导航 (3 项) ---
+    if "nav_page" not in st.session_state:
+        st.session_state.nav_page = "🆕 新建项目"
+    if st.session_state.get("_switch_to_analysis"):
+        st.session_state.nav_page = "🔬 分析对话"
+        st.session_state._switch_to_analysis = False
     page = st.sidebar.radio(
         "导航",
         ["🆕 新建项目", "🔬 分析对话", "⚙ 设置"],
         label_visibility="collapsed",
+        key="nav_page",
     )
 
     st.sidebar.divider()
+
+    pm = _get_pm()
 
     # --- 当前项目 ---
     if "project_name" in st.session_state:
         st.sidebar.caption(f"当前项目: {st.session_state.project_name}")
 
     # --- 折叠面板: 数据列表 ---
-    if "project_id" in st.session_state:
-        from engine.project_manager import ProjectManager
-        pm = ProjectManager()
-
-        with st.sidebar.expander("📂 数据列表", expanded=False):
+    with st.sidebar.expander("📂 数据列表", expanded=False):
+        if "project_id" not in st.session_state:
+            st.caption("请先选择或创建项目")
+        else:
             try:
                 data_files = pm.list_data_files(st.session_state.project_id)
             except Exception:
@@ -53,11 +68,11 @@ def main():
 
                 col_all, col_none = st.columns(2)
                 with col_all:
-                    if st.button("全选", key="select_all", use_container_width=True):
+                    if st.button("全选", key="select_all", width="stretch"):
                         st.session_state.selected_data_files = [f["name"] for f in data_files]
                         st.rerun()
                 with col_none:
-                    if st.button("取消全选", key="select_none", use_container_width=True):
+                    if st.button("取消全选", key="select_none", width="stretch"):
                         st.session_state.selected_data_files = []
                         st.rerun()
 
@@ -78,45 +93,49 @@ def main():
                 else:
                     st.warning("请至少选择一个数据文件")
 
-            if st.button("+ 上传新数据", key="upload_from_sidebar", use_container_width=True):
+            if st.button("+ 上传新数据", key="upload_from_sidebar", width="stretch"):
                 st.session_state.show_upload_dialog = True
                 st.rerun()
 
-        # --- 折叠面板: 历史项目 ---
-        with st.sidebar.expander("📁 历史项目", expanded=False):
-            projects = pm.list_projects()
-            if not projects:
-                st.caption("暂无项目")
-            else:
-                for proj in projects:
-                    is_current = proj["id"] == st.session_state.get("project_id")
-                    if st.button(
-                        f"{'📊' if is_current else '📁'} {proj['name']}",
-                        key=f"hist_{proj['id']}",
-                        use_container_width=True,
-                        help=f"创建: {proj['created_at'][:10]}",
-                    ):
-                        if not is_current:
-                            project_data = pm.load_project(proj['id'])
-                            st.session_state.project_id = proj['id']
-                            st.session_state.project_name = proj['name']
-                            st.session_state.df = project_data["dataframe"]
-                            st.session_state.chat_history = project_data["chat_history"]
-                            st.session_state.analysis_state = project_data["state"]
-                            data_files = pm.list_data_files(proj['id'])
-                            st.session_state.selected_data_files = [f["name"] for f in data_files]
-                            if "conclusion_text" in st.session_state:
-                                del st.session_state.conclusion_text
-                            if "viewing_step_index" in st.session_state:
-                                del st.session_state.viewing_step_index
-                            if "report_preview_mode" in st.session_state:
-                                del st.session_state.report_preview_mode
-                            if "agent" in st.session_state:
-                                del st.session_state.agent
-                            st.rerun()
+    # --- 折叠面板: 历史项目 ---
+    with st.sidebar.expander("📁 历史项目", expanded=False):
+        projects = pm.list_projects()
+        if not projects:
+            st.caption("暂无项目")
+        else:
+            for proj in projects:
+                is_current = proj["id"] == st.session_state.get("project_id")
+                if st.button(
+                    f"{'📊' if is_current else '📁'} {proj['name']}",
+                    key=f"hist_{proj['id']}",
+                    width="stretch",
+                    help=f"创建: {proj['created_at'][:10]}",
+                ):
+                    if not is_current:
+                        st.session_state._switch_to_analysis = True
+                        project_data = pm.load_project(proj['id'])
+                        st.session_state.project_id = proj['id']
+                        st.session_state.project_name = proj['name']
+                        st.session_state.df = project_data["dataframe"]
+                        st.session_state.chat_history = project_data["chat_history"]
+                        st.session_state.analysis_state = project_data["state"]
+                        data_files = pm.list_data_files(proj['id'])
+                        st.session_state.selected_data_files = [f["name"] for f in data_files]
+                        if "conclusion_text" in st.session_state:
+                            del st.session_state.conclusion_text
+                        if "viewing_step_index" in st.session_state:
+                            del st.session_state.viewing_step_index
+                        if "report_preview_mode" in st.session_state:
+                            del st.session_state.report_preview_mode
+                        if "agent" in st.session_state:
+                            del st.session_state.agent
+                        st.rerun()
 
-        # --- 折叠面板: 历史报告 ---
-        with st.sidebar.expander("📋 历史报告", expanded=False):
+    # --- 折叠面板: 历史报告 ---
+    with st.sidebar.expander("📋 历史报告", expanded=False):
+        if "project_id" not in st.session_state:
+            st.caption("请先选择或创建项目")
+        else:
             try:
                 reports = pm.list_reports(st.session_state.project_id)
             except Exception:
@@ -132,13 +151,10 @@ def main():
 
     # --- 页面路由 ---
     if page == "🆕 新建项目":
-        from views import new_project
         new_project.show()
     elif page == "🔬 分析对话":
-        from views import analysis
         analysis.show()
     elif page == "⚙ 设置":
-        from views import settings
         settings.show()
 
 

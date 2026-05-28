@@ -98,7 +98,7 @@ export function streamExecute(projectId, stepIndex, onChunk, onResult, onDone) {
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           const data = JSON.parse(line.slice(6))
-          if (data.type === 'result') onResult(data.text)
+          if (data.type === 'result') onResult(data.text, data.chart_count || 0)
           if (data.type === 'explanation' && data.chunk) onChunk(data.chunk)
           if (data.type === 'done') { onDone(); return }
           if (data.type === 'error') { onDone(data.message); return }

@@ -4,7 +4,7 @@ import os
 from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -103,7 +103,7 @@ async def list_projects():
 
 
 @app.post("/api/projects")
-async def create_project(name: str, file: UploadFile = File(...)):
+async def create_project(name: str = Form(...), file: UploadFile = File(...)):
     tmp_path = f"temp_{file.filename}"
     with open(tmp_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -375,6 +375,7 @@ async def execute_step(req: StepExecuteRequest):
             "status": "done",
             "result": result_text,
             "llm_explanation": explanation,
+            "chart_count": len(charts),
         }
 
     except Exception as e:
@@ -440,7 +441,7 @@ async def execute_step_stream(req: ExecuteStreamRequest):
             result_df.to_csv(data_path, index=False)
 
         async def generate():
-            yield f"data: {json.dumps({'type': 'result', 'text': result_text})}\n\n"
+            yield f"data: {json.dumps({'type': 'result', 'text': result_text, 'chart_count': len(charts)})}\n\n"
 
             if metrics:
                 agent = _get_agent()
@@ -576,6 +577,18 @@ async def download_specific_report(project_id: str, report_name: str):
     if not os.path.exists(report_path):
         raise HTTPException(404, f"报告 {report_name} 不存在")
     return FileResponse(report_path)
+
+
+# ──────────────────────────────────────────────
+# Charts
+# ──────────────────────────────────────────────
+
+@app.get("/api/projects/{project_id}/charts/{chart_name}")
+async def get_chart(project_id: str, chart_name: str):
+    chart_path = os.path.join("projects", project_id, "charts", chart_name)
+    if not os.path.exists(chart_path):
+        raise HTTPException(404, f"图表 {chart_name} 不存在")
+    return FileResponse(chart_path, media_type="text/html")
 
 
 # ──────────────────────────────────────────────

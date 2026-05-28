@@ -61,12 +61,20 @@
                 🤖 <b>AI 解读:</b> {{ viewingStep.llm_explanation }}
               </div>
               <div v-if="viewingStep.last_text" v-html="renderMarkdown(viewingStep.last_text)" style="font-size: 13px"></div>
+              <div v-for="c in (viewingStep.chart_count || 0)" :key="'h'+c"
+                   style="margin-top: 10px; border: 1px solid #eee; border-radius: 4px; overflow: hidden">
+                <iframe :src="chartUrl(projectStore.viewingStepIndex, c)" style="width: 100%; height: 400px; border: none" />
+              </div>
             </template>
             <div v-else-if="currentResult">
               <div v-if="currentResult.llm_explanation" style="background: #e8f0fe; border-left: 3px solid #1a73e8; padding: 10px 12px; border-radius: 4px; margin-bottom: 12px; font-size: 13px">
                 🤖 <b>AI 解读:</b> {{ currentResult.llm_explanation }}
               </div>
               <div v-if="currentResult.text" v-html="renderMarkdown(currentResult.text)" style="font-size: 13px"></div>
+              <div v-for="c in (currentResult.chart_count || 0)" :key="'c'+c"
+                   style="margin-top: 10px; border: 1px solid #eee; border-radius: 4px; overflow: hidden">
+                <iframe :src="chartUrl(currentStepIndex, c)" style="width: 100%; height: 400px; border: none" />
+              </div>
             </div>
             <div v-else style="color: #999; display: flex; align-items: center; justify-content: center; height: 100%">
               在对话区描述你的分析需求，Agent 将为你规划步骤
@@ -179,6 +187,7 @@ const projectStore = useProjectStore()
 const userInput = ref('')
 const sending = ref(false)
 const executingIndex = ref(-1)
+const currentStepIndex = ref(-1)
 const streamingResponse = ref('')
 const currentResult = ref(null)
 
@@ -207,6 +216,9 @@ const viewingStep = computed(() => {
   }
   return {}
 })
+
+const chartUrl = (stepIdx, chartNum) =>
+  `/api/projects/${projectStore.currentId}/charts/step${stepIdx + 1}_chart${chartNum}.html`
 
 const sendMessage = async () => {
   if (!userInput.value.trim()) return
@@ -244,7 +256,7 @@ const runStep = async (index) => {
     await streamExecute(
       projectStore.currentId, index,
       (chunk) => { streamingResponse.value += chunk },
-      (text) => { currentResult.value = { text } },
+      (text, chartCount) => { currentResult.value = { text, chart_count: chartCount }; currentStepIndex.value = index },
       (error) => {
         if (error) {
           projectStore.updateStep(index, { status: 'error' })
@@ -254,6 +266,7 @@ const runStep = async (index) => {
             status: 'done',
             llm_explanation: streamingResponse.value,
             last_text: currentResult.value?.text || '',
+            chart_count: currentResult.value?.chart_count || 0,
           })
           if (currentResult.value) {
             currentResult.value.llm_explanation = streamingResponse.value

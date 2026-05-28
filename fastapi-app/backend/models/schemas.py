@@ -28,6 +28,7 @@ class GenerateReportRequest(BaseModel):
     step_indices: list[int] = []
     user_notes: str = ""
     include_conclusion: bool = True
+    conclusion: str = ""
 
 
 class MergeDataRequest(BaseModel):

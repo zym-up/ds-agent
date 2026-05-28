@@ -45,12 +45,13 @@ export const executeStep = (projectId, stepIndex) =>
 
 // Reports
 export const listReports = (id) => api.get(`/projects/${id}/reports`)
-export const generateReport = (projectId, title, stepIndices, userNotes, includeConclusion) =>
+export const generateReport = (projectId, title, stepIndices, userNotes, includeConclusion, conclusion) =>
   api.post('/report/generate', {
     project_id: projectId, title,
     step_indices: stepIndices || [],
     user_notes: userNotes || '',
     include_conclusion: includeConclusion !== false,
+    conclusion: conclusion || '',
   })
 
 // SSE helpers

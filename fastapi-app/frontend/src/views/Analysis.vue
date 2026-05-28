@@ -176,7 +176,7 @@
 import { ref, computed } from 'vue'
 import {
   getProjectInfo, addDataFile, generateReport,
-  streamPlan, streamExecute,
+  streamPlan, streamExecute, streamConclude,
 } from '../api'
 import { useProjectStore } from '../stores/project'
 import { ElMessage } from 'element-plus'
@@ -330,15 +330,29 @@ const openReportDialog = () => {
 
 // 报告
 const generateAndPreview = async () => {
+  const stepIndices = reportSelectedSteps.value
   generatingReport.value = true
+  showReportDialog.value = false
+
   try {
-    const res = await generateReport(
+    let conclusionText = ''
+    if (reportIncludeConclusion.value) {
+      // 先流式生成结论（用户可见进度）
+      try {
+        await streamConclude(
+          projectStore.currentId, stepIndices, reportUserNotes.value,
+          (chunk) => { conclusionText += chunk },
+          () => {}
+        )
+      } catch (e) { /* */ }
+    }
+
+    // 报告生成（传入已生成的结论，不再调 LLM，瞬时完成）
+    await generateReport(
       projectStore.currentId, reportTitle.value,
-      reportSelectedSteps.value, reportUserNotes.value, reportIncludeConclusion.value,
+      stepIndices, reportUserNotes.value, true, conclusionText,
     )
     projectStore.reportPreviewMode = true
-    showReportDialog.value = false
-    ElMessage.success('报告已生成')
   } catch (e) {
     ElMessage.error('生成失败: ' + e.message)
   } finally {
@@ -351,7 +365,7 @@ const exportReport = async () => {
   try {
     const res = await generateReport(
       projectStore.currentId, reportTitle.value,
-      reportSelectedSteps.value, reportUserNotes.value, reportIncludeConclusion.value,
+      reportSelectedSteps.value, reportUserNotes.value, false,
     )
     ElMessage.success('报告已保存: ' + res.data.path)
     showReportDialog.value = false

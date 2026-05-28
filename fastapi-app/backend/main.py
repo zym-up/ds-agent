@@ -513,7 +513,9 @@ async def generate_report(req: GenerateReportRequest):
 
     # AI 综合结论
     conclusion = ""
-    if req.include_conclusion and selected_steps:
+    if req.conclusion:
+        conclusion = req.conclusion
+    elif req.include_conclusion and selected_steps:
         step_data = [{"type": s["type"], "explanation": s.get("llm_explanation", "")}
                      for s in selected_steps]
         try:

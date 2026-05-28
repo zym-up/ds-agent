@@ -6,26 +6,34 @@
       <el-button @click="$emit('back')">← 返回分析</el-button>
       <el-button type="primary" @click="downloadReport">⬇ 下载 HTML</el-button>
     </div>
-    <div v-if="reportHtml" v-html="reportHtml" style="border: 1px solid #eee; border-radius: 8px; padding: 20px; background: #fff; min-height: 500px" />
+    <iframe v-if="blobUrl" :src="blobUrl" style="width: 100%; height: calc(100vh - 120px); border: 1px solid #eee; border-radius: 8px" />
     <div v-else style="text-align: center; color: #999; padding: 40px">加载中...</div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useProjectStore } from '../stores/project'
 
 defineEmits(['back'])
 const projectStore = useProjectStore()
-const reportHtml = ref('')
+const blobUrl = ref('')
 
 onMounted(async () => {
   try {
     const res = await fetch(`/api/report/download/${projectStore.currentId}`)
     if (res.ok) {
-      reportHtml.value = await res.text()
+      const html = await res.text()
+      const blob = new Blob([html], { type: 'text/html' })
+      blobUrl.value = URL.createObjectURL(blob)
     }
   } catch (e) { /* */ }
+})
+
+onUnmounted(() => {
+  if (blobUrl.value) {
+    URL.revokeObjectURL(blobUrl.value)
+  }
 })
 
 const downloadReport = () => {

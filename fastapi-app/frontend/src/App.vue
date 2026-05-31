@@ -127,10 +127,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from './stores/project'
-import { listProjects, getProject, listDataFiles, addDataFile, listReports } from './api'
+import { listProjects, getProject, listDataFiles, addDataFile, mergeDataFiles, listReports } from './api'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -161,6 +161,16 @@ const selectAll = () => {
 const selectNone = () => {
   projectStore.selectedDataFiles = []
 }
+
+// 数据文件选择变化时自动合并
+watch(() => projectStore.selectedDataFiles, async (newVal) => {
+  if (!newVal.length || !projectStore.currentId) return
+  try {
+    await mergeDataFiles(projectStore.currentId, newVal)
+  } catch (e) {
+    ElMessage.error('数据合并失败: ' + e.message)
+  }
+}, { deep: true })
 
 // 打开历史项目
 const openProject = async (p) => {

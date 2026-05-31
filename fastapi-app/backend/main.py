@@ -1,6 +1,7 @@
 """FastAPI 应用入口"""
 import sys
 import os
+import logging
 from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -25,6 +26,8 @@ from backend.models.schemas import (
     MergeDataRequest, ConcludeRequest, PlanStreamRequest, ExecuteStreamRequest,
 )
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="数据科学家 Agent API")
 
 app.add_middleware(
@@ -36,13 +39,25 @@ app.add_middleware(
 )
 
 pm = ProjectManager()
+_agent_cache: dict = {}
 
 
-def _get_agent():
-    """获取 AnalysisAgent 实例（每次新建，确保使用最新 config）"""
+def _get_agent(project_id: str = None):
+    """获取 AnalysisAgent 实例（按 project_id 缓存以保持对话连续）"""
+    if project_id and project_id in _agent_cache:
+        return _agent_cache[project_id]
     config = load_config()
     adapter = LLMAdapter(config.llm)
-    return AnalysisAgent(adapter)
+    agent = AnalysisAgent(adapter)
+    if project_id:
+        try:
+            project_data = pm.load_project(project_id)
+            if project_data.get("chat_history"):
+                agent.chat_history = project_data["chat_history"]
+        except Exception:
+            pass
+        _agent_cache[project_id] = agent
+    return agent
 
 
 # ──────────────────────────────────────────────
@@ -108,8 +123,10 @@ async def create_project(name: str = Form(...), file: UploadFile = File(...)):
     with open(tmp_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    project_id = pm.create_project(name, tmp_path)
-    os.unlink(tmp_path)
+    try:
+        project_id = pm.create_project(name, tmp_path)
+    finally:
+        os.unlink(tmp_path)
 
     data_files = pm.list_data_files(project_id)
     df = pm.merge_selected_data(project_id, [f["name"] for f in data_files])
@@ -191,7 +208,7 @@ async def plan_analysis(req: AnalysisRequest):
         raise HTTPException(400, "项目无数据")
 
     info = get_data_info(df)
-    agent = _get_agent()
+    agent = _get_agent(req.project_id)
     plan = agent.plan_analysis(req.user_input, info)
 
     state = data["state"]
@@ -212,7 +229,7 @@ async def plan_analysis_stream(req: PlanStreamRequest):
         raise HTTPException(400, "项目无数据")
 
     info = get_data_info(df)
-    agent = _get_agent()
+    agent = _get_agent(req.project_id)
 
     messages = [
         {"role": "system", "content": agent.build_system_prompt()},
@@ -268,34 +285,129 @@ async def plan_analysis_stream(req: PlanStreamRequest):
 # Analysis — Execute Step
 # ──────────────────────────────────────────────
 
-def _build_metrics(step_type: str, step_params: dict, df, result_df, result):
-    """构造传给 LLM 解读的指标字典"""
+def _run_analysis_step(step_type: str, params: dict, df) -> dict:
+    """执行分析步骤核心逻辑，返回 {charts, text, metrics, result_df}"""
+    charts = []
+    text = ""
+    metrics = {}
+    result_df = df
+
     if step_type == "clean":
-        return result  # clean_pipeline 返回的 summary dict
+        # 映射 LLM 参数名 → 引擎参数名
+        clean_params = {}
+        if "columns" in params:
+            clean_params["fill_columns"] = params["columns"]
+            clean_params["outlier_columns"] = params["columns"]
+        if "handle_outliers" in params:
+            clean_params["outlier_method"] = params["handle_outliers"].lower()
+        if "handle_missing" in params:
+            if params["handle_missing"] == "drop":
+                df = df.dropna(subset=params.get("columns"))
+            else:
+                clean_params["fill_strategy"] = params["handle_missing"]
+        result_df, summary = clean_pipeline(df, **clean_params)
+        text = json.dumps(summary, ensure_ascii=False, indent=2)
+        metrics = summary
+
     elif step_type == "eda":
+        numeric_cols = params.get("columns") or df.select_dtypes(include=["number"]).columns.tolist()
+        result = eda_pipeline(df, numeric_columns=numeric_cols)
+        charts = result["charts"]
+        text = f"行数: {result['row_count']}, 列数: {result['column_count']}"
         stats_summary = {}
         for k, v in result.get("stats_summary", {}).items():
             stats_summary[k] = str(v)
-        return {"行数": result["row_count"], "列数": result["column_count"], "统计摘要": stats_summary}
+        metrics = {"行数": result["row_count"], "列数": result["column_count"], "统计摘要": stats_summary}
+
     elif step_type == "model":
-        return result  # metrics dict
-    return {}
+        # LLM 模型名映射 → 引擎识别的名称
+        _MODEL_ALIASES = {
+            "random_forest_regressor": "random_forest", "randomforest": "random_forest",
+            "random_forest": "random_forest",
+            "xgboost_regressor": "xgboost", "xgb": "xgboost", "xgboost": "xgboost",
+            "linear_regression": "linear", "linear": "linear",
+            "ridge_regression": "ridge", "ridge": "ridge",
+            "lasso_regression": "lasso", "lasso": "lasso",
+        }
+        target = params.get("target", "")
+        raw_type = params.get("model_type", "linear")
+        model_type = _MODEL_ALIASES.get(raw_type, raw_type)
+        numeric_cols = [c for c in df.select_dtypes(include=["number"]).columns if c != target]
+        model_df = df[numeric_cols + [target]].dropna()
+        X_train, X_test, y_train, y_test = split_data(model_df, target)
+        model, _ = train_regression(X_train, y_train, model_type)
+        eval_metrics = evaluate_regression(model, X_test, y_test)
+        _, imp_fig = feature_importance(model, numeric_cols)
+        charts.append(imp_fig)
+        y_pred = model.predict(X_test)
+        res_fig = residual_plot(y_test, y_pred)
+        charts.append(res_fig)
+        text = json.dumps(eval_metrics, ensure_ascii=False, indent=2)
+        metrics = eval_metrics
+
+    elif step_type == "feature":
+        from engine.feature_engineer import scale_features, encode_categorical, select_by_variance, select_by_correlation
+
+        text_parts = ["### 特征工程结果"]
+        result_df = df.copy()
+
+        scale_params = params.get("scale")
+        if scale_params:
+            cols = scale_params.get("columns", [])
+            method = scale_params.get("method", "standard")
+            if cols:
+                result_df, summary = scale_features(result_df, cols, method)
+                text_parts.append(f"- 标准化 ({summary['方法']}): {', '.join(summary['处理列'])}")
+                metrics["标准化"] = summary
+
+        encode_params = params.get("encode")
+        if encode_params:
+            cols = encode_params.get("columns", [])
+            method = encode_params.get("method", "onehot")
+            if cols:
+                result_df, summary = encode_categorical(result_df, cols, method)
+                text_parts.append(f"- 编码 ({summary['方法']}): {', '.join(summary['处理列'])}")
+                metrics["编码"] = summary
+
+        variance_threshold = params.get("variance_threshold")
+        if variance_threshold:
+            result_df, summary = select_by_variance(result_df, variance_threshold)
+            text_parts.append(f"- 方差过滤 (阈值={summary['阈值']}): 保留 {len(summary['保留特征'])} 个")
+            metrics["方差过滤"] = summary
+
+        corr_params = params.get("correlation")
+        if corr_params:
+            target = corr_params.get("target", "")
+            k = corr_params.get("k", 10)
+            method = corr_params.get("method", "f_regression")
+            if target and target in result_df.columns:
+                selected, summary = select_by_correlation(result_df, target, k, method)
+                text_parts.append(f"- 相关性选择 (目标={target}): TOP {len(selected)} 特征")
+                text_parts.append(f"  选中: {', '.join(selected[:10])}")
+                metrics["相关性选择"] = summary
+
+        text = "\n".join(text_parts)
+
+    elif step_type == "report":
+        text = "报告生成请使用 /api/report/generate 端点"
+
+    return {"charts": charts, "text": text, "metrics": metrics, "result_df": result_df}
 
 
 def _load_chart_html(project_id: str, step_index: int) -> str:
     """从磁盘加载步骤关联的图表 HTML"""
     chart_dir = os.path.join("projects", project_id, "charts")
-    html = ""
+    html_parts = []
     j = 1
-    while True:
+    while j <= 100:
         chart_path = os.path.join(chart_dir, f"step{step_index + 1}_chart{j}.html")
         if os.path.exists(chart_path):
             with open(chart_path, "r", encoding="utf-8") as f:
-                html += f.read()
+                html_parts.append(f.read())
             j += 1
         else:
             break
-    return html
+    return "".join(html_parts)
 
 
 @app.post("/api/analysis/execute")
@@ -307,78 +419,42 @@ async def execute_step(req: StepExecuteRequest):
     step_type = step["type"]
     params = step.get("params", {})
 
-    charts = []
-    result_text = ""
-    metrics = {}
-    result_df = df
-
     try:
-        if step_type == "clean":
-            result_df, summary = clean_pipeline(df, **params)
-            result_text = json.dumps(summary, ensure_ascii=False, indent=2)
-            metrics = summary
+        result = _run_analysis_step(step_type, params, df)
 
-        elif step_type == "eda":
-            numeric_cols = params.get("columns") or df.select_dtypes(include=["number"]).columns.tolist()
-            result = eda_pipeline(df, numeric_columns=numeric_cols)
-            charts = result["charts"]
-            result_text = f"行数: {result['row_count']}, 列数: {result['column_count']}"
-            metrics = _build_metrics("eda", params, df, result_df, result)
-
-        elif step_type == "model":
-            target = params.get("target", "")
-            model_type = params.get("model_type", "linear")
-            numeric_cols = [c for c in df.select_dtypes(include=["number"]).columns if c != target]
-            model_df = df[numeric_cols + [target]].dropna()
-            X_train, X_test, y_train, y_test = split_data(model_df, target)
-            model, _ = train_regression(X_train, y_train, model_type)
-            eval_metrics = evaluate_regression(model, X_test, y_test)
-            _, imp_fig = feature_importance(model, numeric_cols)
-            charts.append(imp_fig)
-            y_pred = model.predict(X_test)
-            res_fig = residual_plot(y_test, y_pred)
-            charts.append(res_fig)
-            result_text = json.dumps(eval_metrics, ensure_ascii=False, indent=2)
-            metrics = eval_metrics
-
-        elif step_type == "report":
-            result_text = "报告生成请使用 /api/report/generate 端点"
-
-        # LLM 解读
         explanation = ""
-        if metrics:
+        if result["metrics"]:
             try:
-                agent = _get_agent()
+                agent = _get_agent(req.project_id)
                 agent_step = AnalysisStep(
                     id=req.step_index + 1,
                     type=step_type,
                     description=step.get("description", ""),
                 )
-                explanation = agent.explain_result(agent_step, metrics)
+                explanation = agent.explain_result(agent_step, result["metrics"])
             except Exception:
-                pass
+                logger.warning("LLM 解读失败", exc_info=True)
 
         state["steps"][req.step_index]["status"] = "done"
         state["steps"][req.step_index]["llm_explanation"] = explanation
         pm.save_state(req.project_id, state)
 
-        # 保存图表
-        for j, chart in enumerate(charts):
+        for j, chart in enumerate(result["charts"]):
             pm.save_chart(req.project_id, f"step{req.step_index + 1}_chart{j + 1}", chart)
 
-        # 持久化清洗后的数据
         if step_type == "clean":
             data_path = os.path.join("projects", req.project_id, "data", "original.csv")
-            result_df.to_csv(data_path, index=False)
+            result["result_df"].to_csv(data_path, index=False)
 
         return {
             "status": "done",
-            "result": result_text,
+            "result": result["text"],
             "llm_explanation": explanation,
-            "chart_count": len(charts),
+            "chart_count": len(result["charts"]),
         }
 
     except Exception as e:
+        logger.warning("步骤执行失败", exc_info=True)
         state["steps"][req.step_index]["status"] = "error"
         pm.save_state(req.project_id, state)
         return {"status": "error", "result": str(e)}
@@ -393,58 +469,24 @@ async def execute_step_stream(req: ExecuteStreamRequest):
     step_type = step["type"]
     params = step.get("params", {})
 
-    charts = []
-    result_text = ""
-    metrics = {}
-    result_df = df
-
     try:
-        if step_type == "clean":
-            result_df, summary = clean_pipeline(df, **params)
-            result_text = json.dumps(summary, ensure_ascii=False, indent=2)
-            metrics = summary
-
-        elif step_type == "eda":
-            numeric_cols = params.get("columns") or df.select_dtypes(include=["number"]).columns.tolist()
-            result = eda_pipeline(df, numeric_columns=numeric_cols)
-            charts = result["charts"]
-            result_text = f"行数: {result['row_count']}, 列数: {result['column_count']}"
-            metrics = _build_metrics("eda", params, df, result_df, result)
-
-        elif step_type == "model":
-            target = params.get("target", "")
-            model_type = params.get("model_type", "linear")
-            numeric_cols = [c for c in df.select_dtypes(include=["number"]).columns if c != target]
-            model_df = df[numeric_cols + [target]].dropna()
-            X_train, X_test, y_train, y_test = split_data(model_df, target)
-            model, _ = train_regression(X_train, y_train, model_type)
-            eval_metrics = evaluate_regression(model, X_test, y_test)
-            _, imp_fig = feature_importance(model, numeric_cols)
-            charts.append(imp_fig)
-            y_pred = model.predict(X_test)
-            res_fig = residual_plot(y_test, y_pred)
-            charts.append(res_fig)
-            result_text = json.dumps(eval_metrics, ensure_ascii=False, indent=2)
-            metrics = eval_metrics
-
-        elif step_type == "report":
-            result_text = "报告生成请使用 /api/report/generate 端点"
+        result = _run_analysis_step(step_type, params, df)
 
         state["steps"][req.step_index]["status"] = "done"
         pm.save_state(req.project_id, state)
 
-        for j, chart in enumerate(charts):
+        for j, chart in enumerate(result["charts"]):
             pm.save_chart(req.project_id, f"step{req.step_index + 1}_chart{j + 1}", chart)
 
         if step_type == "clean":
             data_path = os.path.join("projects", req.project_id, "data", "original.csv")
-            result_df.to_csv(data_path, index=False)
+            result["result_df"].to_csv(data_path, index=False)
 
         async def generate():
-            yield f"data: {json.dumps({'type': 'result', 'text': result_text, 'chart_count': len(charts)})}\n\n"
+            yield f"data: {json.dumps({'type': 'result', 'text': result['text'], 'chart_count': len(result['charts'])})}\n\n"
 
-            if metrics:
-                agent = _get_agent()
+            if result["metrics"]:
+                agent = _get_agent(req.project_id)
                 agent_step = AnalysisStep(
                     id=req.step_index + 1,
                     type=step_type,
@@ -452,15 +494,16 @@ async def execute_step_stream(req: ExecuteStreamRequest):
                 )
                 full_explanation = ""
                 try:
-                    for chunk in agent.explain_result_stream(agent_step, metrics):
+                    for chunk in agent.explain_result_stream(agent_step, result["metrics"]):
                         full_explanation += chunk
                         yield f"data: {json.dumps({'type': 'explanation', 'chunk': chunk})}\n\n"
                 except Exception:
+                    logger.warning("LLM 流式解读失败，尝试同步", exc_info=True)
                     try:
-                        full_explanation = agent.explain_result(agent_step, metrics)
+                        full_explanation = agent.explain_result(agent_step, result["metrics"])
                         yield f"data: {json.dumps({'type': 'explanation', 'chunk': full_explanation})}\n\n"
                     except Exception:
-                        pass
+                        logger.warning("LLM 同步解读也失败", exc_info=True)
 
                 state["steps"][req.step_index]["llm_explanation"] = full_explanation
                 pm.save_state(req.project_id, state)
@@ -470,6 +513,7 @@ async def execute_step_stream(req: ExecuteStreamRequest):
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     except Exception as e:
+        logger.warning("步骤执行失败", exc_info=True)
         state["steps"][req.step_index]["status"] = "error"
         pm.save_state(req.project_id, state)
 
@@ -519,9 +563,10 @@ async def generate_report(req: GenerateReportRequest):
         step_data = [{"type": s["type"], "explanation": s.get("llm_explanation", "")}
                      for s in selected_steps]
         try:
-            agent = _get_agent()
+            agent = _get_agent(req.project_id)
             conclusion = "".join(list(agent.summarize_conclusions(step_data, req.user_notes)))
         except Exception:
+            logger.warning("AI 结论生成失败", exc_info=True)
             conclusion = "分析完成"
 
     df = data["dataframe"]
@@ -549,7 +594,7 @@ async def conclude_stream(req: ConcludeRequest):
     step_data = [{"type": s["type"], "explanation": s.get("llm_explanation", "")}
                  for s in selected_steps]
 
-    agent = _get_agent()
+    agent = _get_agent(req.project_id)
 
     async def generate():
         try:

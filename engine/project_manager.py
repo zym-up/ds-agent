@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 import pandas as pd
+import plotly.graph_objs as go
+import plotly.io as pio
 
 
 class ProjectManager:
@@ -83,6 +85,27 @@ class ProjectManager:
         if state_path.exists():
             with open(state_path, "r", encoding="utf-8") as f:
                 state = json.load(f)
+            for step in state.get("steps", []):
+                if "last_charts" in step and step["last_charts"]:
+                    restored = []
+                    for c in step["last_charts"]:
+                        if isinstance(c, str):
+                            try:
+                                restored.append(pio.from_json(c))
+                            except (ValueError, KeyError, TypeError):
+                                # 旧版损坏数据: Figure(...) repr 字符串 → 尝试提取 JSON
+                                try:
+                                    import ast
+                                    inner = c.strip()
+                                    if inner.startswith("Figure("):
+                                        inner = inner[7:-1]  # 去掉 "Figure(" 和 ")"
+                                    fig_dict = ast.literal_eval(inner)
+                                    restored.append(pio.from_json(json.dumps(fig_dict)))
+                                except Exception:
+                                    pass
+                        elif isinstance(c, go.Figure):
+                            restored.append(c)
+                    step["last_charts"] = restored
 
         chat_history = []
         chat_path = pdir / "chat_history.json"
@@ -104,9 +127,19 @@ class ProjectManager:
 
     def save_state(self, project_id: str, state: dict) -> None:
         """保存分析状态"""
+        serialized = {"steps": [], "current_step": state.get("current_step", 0)}
+        for step in state.get("steps", []):
+            s = dict(step)
+            if "last_charts" in s and s["last_charts"]:
+                s["last_charts"] = [
+                    c.to_json() if isinstance(c, go.Figure) else c
+                    for c in s["last_charts"]
+                ]
+            serialized["steps"].append(s)
+
         pdir = self.projects_dir / project_id
         with open(pdir / "state.json", "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2, default=str)
+            json.dump(serialized, f, ensure_ascii=False, indent=2)
 
         meta_path = pdir / "meta.json"
         with open(meta_path, "r", encoding="utf-8") as f:

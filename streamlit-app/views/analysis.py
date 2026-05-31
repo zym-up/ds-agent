@@ -2,6 +2,7 @@
 import streamlit as st
 import json
 import os
+import logging
 import pandas as pd
 from engine.data_loader import get_data_info
 from engine.config import load_config
@@ -11,6 +12,8 @@ from engine.eda import eda_pipeline
 from engine.modeler import train_regression, evaluate_regression, split_data, feature_importance, residual_plot
 from engine.project_manager import ProjectManager
 from engine.reporter import generate_html_report, build_section
+
+logger = logging.getLogger(__name__)
 
 
 def show():
@@ -253,8 +256,8 @@ def show():
                 if step.get("last_text"):
                     st.markdown(step["last_text"])
                 if step.get("last_charts"):
-                    for chart in step["last_charts"]:
-                        st.plotly_chart(chart, width="stretch", key=f"hist_chart_{viewing_idx}")
+                    for j, chart in enumerate(step["last_charts"]):
+                        st.plotly_chart(chart, width="stretch", key=f"hist_chart_{viewing_idx}_{j}")
             elif "last_result" in st.session_state:
                 result = st.session_state.last_result
                 if result.get("llm_explanation"):
@@ -388,7 +391,19 @@ def _execute_step(step_index: int, step_def: dict, df, pm):
 
     try:
         if step_type == "clean":
-            result_df, summary = clean_pipeline(df, **params)
+            # 映射 LLM 参数名 → 引擎参数名
+            clean_params = {}
+            if "columns" in params:
+                clean_params["fill_columns"] = params["columns"]
+                clean_params["outlier_columns"] = params["columns"]
+            if "handle_outliers" in params:
+                clean_params["outlier_method"] = params["handle_outliers"].lower()
+            if "handle_missing" in params:
+                if params["handle_missing"] == "drop":
+                    df = df.dropna(subset=params.get("columns"))
+                else:
+                    clean_params["fill_strategy"] = params["handle_missing"]
+            result_df, summary = clean_pipeline(df, **clean_params)
             text = f"### 数据清洗完成\n```json\n{json.dumps(summary, ensure_ascii=False, indent=2)}\n```"
             metrics_for_llm = summary
 
@@ -403,8 +418,18 @@ def _execute_step(step_index: int, step_def: dict, df, pm):
             metrics_for_llm = {"行数": result["row_count"], "列数": result["column_count"], "统计摘要": stats_summary}
 
         elif step_type == "model":
+            # LLM 模型名映射 → 引擎识别的名称
+            _MODEL_ALIASES = {
+                "random_forest_regressor": "random_forest", "randomforest": "random_forest",
+                "random_forest": "random_forest",
+                "xgboost_regressor": "xgboost", "xgb": "xgboost", "xgboost": "xgboost",
+                "linear_regression": "linear", "linear": "linear",
+                "ridge_regression": "ridge", "ridge": "ridge",
+                "lasso_regression": "lasso", "lasso": "lasso",
+            }
             target = params.get("target", "")
-            model_type = params.get("model_type", "linear")
+            raw_type = params.get("model_type", "linear")
+            model_type = _MODEL_ALIASES.get(raw_type, raw_type)
             numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
             if target in numeric_cols:
                 numeric_cols.remove(target)
@@ -422,6 +447,50 @@ def _execute_step(step_index: int, step_def: dict, df, pm):
                 text += f"- {k}: {v}\n"
             metrics_for_llm = metrics
 
+        elif step_type == "feature":
+            from engine.feature_engineer import scale_features, encode_categorical, select_by_variance, select_by_correlation
+
+            text_parts = ["### 特征工程结果"]
+            metrics_for_llm = {}
+            result_df = df.copy()
+
+            scale_params = params.get("scale")
+            if scale_params:
+                cols = scale_params.get("columns", [])
+                method = scale_params.get("method", "standard")
+                if cols:
+                    result_df, summary = scale_features(result_df, cols, method)
+                    text_parts.append(f"- 标准化 ({summary['方法']}): {', '.join(summary['处理列'])}")
+                    metrics_for_llm["标准化"] = summary
+
+            encode_params = params.get("encode")
+            if encode_params:
+                cols = encode_params.get("columns", [])
+                method = encode_params.get("method", "onehot")
+                if cols:
+                    result_df, summary = encode_categorical(result_df, cols, method)
+                    text_parts.append(f"- 编码 ({summary['方法']}): {', '.join(summary['处理列'])}")
+                    metrics_for_llm["编码"] = summary
+
+            variance_threshold = params.get("variance_threshold")
+            if variance_threshold:
+                result_df, summary = select_by_variance(result_df, variance_threshold)
+                text_parts.append(f"- 方差过滤 (阈值={summary['阈值']}): 保留 {len(summary['保留特征'])} 个, 移除 {len(summary['移除特征'])} 个")
+                metrics_for_llm["方差过滤"] = summary
+
+            corr_params = params.get("correlation")
+            if corr_params:
+                target = corr_params.get("target", "")
+                k = corr_params.get("k", 10)
+                method = corr_params.get("method", "f_regression")
+                if target and target in result_df.columns:
+                    selected, summary = select_by_correlation(result_df, target, k, method)
+                    text_parts.append(f"- 相关性选择 (目标={target}): TOP {len(selected)} 特征")
+                    text_parts.append(f"  选中特征: {', '.join(selected[:10])}")
+                    metrics_for_llm["相关性选择"] = summary
+
+            text = "\n".join(text_parts)
+
         elif step_type == "report":
             text = "报告生成请使用顶部「📋 导出报告」按钮。"
             metrics_for_llm = {}
@@ -436,12 +505,13 @@ def _execute_step(step_index: int, step_def: dict, df, pm):
                         st.session_state.agent.explain_result_stream(agent_step, metrics_for_llm)
                     )
             except Exception:
-                pass
+                logger.warning("AI 流式解读失败，尝试同步解读")
             if not explanation_text:
                 try:
                     explanation_text = st.session_state.agent.explain_result(agent_step, metrics_for_llm)
                 except Exception:
-                    pass
+                    logger.warning("AI 解读失败")
+                    st.warning("AI 解读暂时不可用，分析结果仍可查看。")
 
         st.session_state.analysis_state["steps"][step_index]["status"] = "done"
         st.session_state.analysis_state["steps"][step_index]["llm_explanation"] = explanation_text

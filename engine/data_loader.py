@@ -26,10 +26,11 @@ def load_excel(file_path: str, sheet_name: Optional[str] = None, **kwargs) -> pd
     """加载 Excel 文件"""
     if sheet_name:
         return pd.read_excel(file_path, sheet_name=sheet_name, **kwargs)
-    xl = pd.ExcelFile(file_path)
-    if len(xl.sheet_names) == 1:
+    with pd.ExcelFile(file_path) as xl:
+        sheets = xl.sheet_names
+    if len(sheets) == 1:
         return pd.read_excel(file_path, **kwargs)
-    return pd.read_excel(file_path, sheet_name=xl.sheet_names[0], **kwargs)
+    return pd.read_excel(file_path, sheet_name=sheets[0], **kwargs)
 
 
 def load_json(file_path: str, **kwargs) -> pd.DataFrame:

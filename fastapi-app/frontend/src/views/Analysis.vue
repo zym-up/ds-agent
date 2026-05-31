@@ -180,6 +180,7 @@ import {
 } from '../api'
 import { useProjectStore } from '../stores/project'
 import { ElMessage } from 'element-plus'
+import DOMPurify from 'dompurify'
 import ReportPreview from './ReportPreview.vue'
 
 const projectStore = useProjectStore()
@@ -294,7 +295,9 @@ const loadProjectInfo = async () => {
   try {
     const res = await getProjectInfo(projectStore.currentId)
     projectInfo.value = res.data
-  } catch (e) { /* */ }
+  } catch (e) {
+    ElMessage.error('加载项目信息失败')
+  }
 }
 
 // 上传文件
@@ -344,7 +347,9 @@ const generateAndPreview = async () => {
           (chunk) => { conclusionText += chunk },
           () => {}
         )
-      } catch (e) { /* */ }
+      } catch (e) {
+        ElMessage.warning('AI 结论生成失败，将继续导出无结论的报告')
+      }
     }
 
     // 报告生成（传入已生成的结论，不再调 LLM，瞬时完成）
@@ -376,14 +381,18 @@ const exportReport = async () => {
   }
 }
 
-// 简单 markdown 渲染
+// 简单 markdown 渲染 + XSS 防护
 const renderMarkdown = (text) => {
   if (!text) return ''
-  return text
+  let html = text
     .replace(/### (.+)/g, '<h4>$1</h4>')
     .replace(/## (.+)/g, '<h3>$1</h3>')
     .replace(/- (.+)/g, '<li>$1</li>')
     .replace(/```json\n?([\s\S]*?)```/g, '<pre style="background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px">$1</pre>')
     .replace(/\n\n/g, '<br/><br/>')
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['h3', 'h4', 'li', 'pre', 'br', 'strong', 'em', 'code', 'b', 'i', 'ul', 'ol', 'p', 'span'],
+    ALLOWED_ATTRS: ['style'],
+  })
 }
 </script>

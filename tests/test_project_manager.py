@@ -121,7 +121,7 @@ class TestStateSerialization:
         assert "last_charts" not in loaded["state"]["steps"][0]
 
     def test_corrupted_state_handled_gracefully(self, pm):
-        """旧版损坏的 state.json（'Figure(...)' 字符串）不会导致加载崩溃"""
+        """旧版损坏的 state.json（'Figure(...)' 字符串）能被恢复为 Figure 对象"""
         pid = pm.create_project("损坏数据项目")
         state_path = pm.projects_dir / pid / "state.json"
 
@@ -140,9 +140,11 @@ class TestStateSerialization:
         with open(state_path, "w", encoding="utf-8") as f:
             json.dump(corrupted, f, ensure_ascii=False)
 
-        # 加载不应崩溃，损坏的图表被跳过
+        # 加载不应崩溃，attempt to recover from corrupted Figure(...) strings
         loaded = pm.load_project(pid)
-        assert loaded["state"]["steps"][0]["last_charts"] == []
+        charts = loaded["state"]["steps"][0]["last_charts"]
+        assert len(charts) == 1
+        assert isinstance(charts[0], go.Figure)
 
 
 class TestSaveChart:

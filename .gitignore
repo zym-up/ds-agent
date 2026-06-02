@@ -4,7 +4,6 @@ __pycache__/
 *.pyo
 .pytest_cache/
 node_modules/
-dist/
 projects/
 config.json
 *.log

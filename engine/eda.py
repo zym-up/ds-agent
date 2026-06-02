@@ -82,6 +82,48 @@ def scatter_plot(
     return fig
 
 
+def describe(df: pd.DataFrame, columns: Optional[list] = None) -> str:
+    """数值列统计摘要，纯文本不生成图表"""
+    targets = [c for c in (columns or df.columns) if pd.api.types.is_numeric_dtype(df[c])]
+    if not targets:
+        return "无可用数值列"
+    stats = df[targets].describe(percentiles=[0.25, 0.5, 0.75])
+    lines = ["### 数据统计摘要", f"- 总行数: {len(df)}", f"- 数值列数: {len(targets)}", ""]
+    lines.append("| 列名 | 均值 | 标准差 | 最小值 | Q1 | 中位数 | Q3 | 最大值 |")
+    lines.append("|------|------|--------|--------|-----|--------|-----|--------|")
+    for col in targets:
+        s = stats[col]
+        lines.append(f"| {col} | {s['mean']:.2f} | {s['std']:.2f} | {s['min']:.2f} | "
+                     f"{s['25%']:.2f} | {s['50%']:.2f} | {s['75%']:.2f} | {s['max']:.2f} |")
+    return "\n".join(lines)
+
+
+def line_plot(
+    df: pd.DataFrame, x: str, y: str, group_by: Optional[str] = None
+) -> go.Figure:
+    """折线图，支持按分组列绘制多条折线"""
+    if group_by and group_by in df.columns:
+        fig = go.Figure()
+        for name, group in df.groupby(group_by):
+            sorted_group = group.sort_values(x)
+            fig.add_trace(go.Scatter(
+                x=sorted_group[x], y=sorted_group[y],
+                mode="lines+markers", name=str(name),
+            ))
+        fig.update_layout(title=f"{y} vs {x} (按 {group_by} 分组)", height=500)
+    else:
+        sorted_df = df.sort_values(x)
+        fig = go.Figure(go.Scatter(
+            x=sorted_df[x], y=sorted_df[y],
+            mode="lines+markers", name=f"{y} vs {x}",
+        ))
+        fig.update_layout(
+            title=f"{y} vs {x}",
+            xaxis_title=x, yaxis_title=y, height=500,
+        )
+    return fig
+
+
 def pair_plot(df: pd.DataFrame, columns: list, color: Optional[str] = None) -> go.Figure:
     """多变量配对散点图矩阵"""
     n = len(columns)

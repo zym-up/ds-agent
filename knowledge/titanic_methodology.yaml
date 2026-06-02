@@ -1,0 +1,378 @@
+# ──────────────────────────────────────────────
+# 数据分析决策指南 — 以 Titanic 生存预测为案例
+#
+# 目的: 教 LLM 如何根据用户意图选择分析方法并组合步骤
+# 核心理念: 每个分析决策都要有"为什么这样做"的理由
+# ──────────────────────────────────────────────
+
+# ══════════════════════════════════════════════
+# 第一部分: 用户意图识别
+# 根据用户的表述判断分析目标, 匹配合适的分析链路
+# ══════════════════════════════════════════════
+
+意图识别映射:
+
+  # ── 数据概览类 ──
+  - 意图: 数据概览 / 快速了解
+    典型表述:
+      - "看看数据" "数据长什么样" "数据基本情况"
+      - "有哪些列" "数据规模" "大概了解一下"
+      - "描述性统计" "数据摘要"
+    分析目标: 快速获取数据集规模、列类型、基本统计量
+    推荐步骤:
+      - {type: eda, method: describe, 理由: "统计摘要(均值/标准差/分位数)是了解数据最快的方式，无图表纯文本"}
+      - {type: eda, method: distribution, 理由: "直方图+箱线图直观展示各列分布形态，发现偏态和异常值"}
+    变体规则:
+      - "用户只提到某个具体列 → 只对该列做 distribution"
+      - "用户说'全部看一下' → describe + 前6个数值列 distribution"
+    泰坦尼克示例:
+      用户: "看看 Titanic 数据什么样"
+      → describe 全表 + distribution(Age, Fare)
+      → 发现: Age 右偏(年轻人多), Fare 高度右偏(少数高票价), 20%年龄缺失
+
+  # ── 分布探索类 ──
+  - 意图: 探索某列分布
+    典型表述:
+      - "...的分布" "直方图" "...列数据长什么样"
+      - "...的取值区间" "...有没有异常值"
+      - "...是正态分布吗"
+    分析目标: 查看单列的分布形态
+    推荐步骤:
+      - {type: eda, method: distribution, 理由: "直方图+箱线图一体展示分布形态和离群点"}
+      - 可选: {type: clean, method: detect_outliers, 理由: "如果用户关心异常值，用 IQR/Z-Score 量化检测"}
+    泰坦尼克示例:
+      用户: "Fare 票价分布怎么样"
+      → distribution(Fare) → 发现严重右偏, 少数人买了高价票
+      → 建议: log变换或分箱处理
+
+  # ── 变量关系类 ──
+  - 意图: 两个变量的关系
+    典型表述:
+      - "...和...的关系" "...影响...吗" "...和...有关吗"
+      - "...随...变化" "...vs..." "...对比..."
+      - "散点图" "折线图" "相关性"
+    分析目标: 理解两个变量间的关联
+    方法选择:
+      都是数值列 → scatter (散点图看形态) + correlation (数值度量)
+      有顺序/时间列 → line (折线图看趋势)
+      分类 vs 数值 → 先 encode 再分析, 或用分组统计
+    推荐步骤:
+      - {type: eda, method: scatter, params: {x, y, trendline: true}, 理由: "趋势线量化线性关系强度"}
+      - {type: eda, method: line, params: {x, y, group_by}, 理由: "如果用户关心随时间/分组的变化趋势"}
+    泰坦尼克示例:
+      用户: "Age 和 Fare 有关系吗"
+      → scatter(Age, Fare) → 无明显线性关系, 但能看到头等舱高票价集中
+      → 追问: "按 Pclass 分组看呢?" → scatter(Age, Fare, color=Pclass) 更有意义
+
+  # ── 多变量探索类 ──
+  - 意图: 同时看多个变量的关系
+    典型表述:
+      - "所有变量的相关性" "哪些变量相关"
+      - "相关性热力图" "配对图" "多变量分析"
+    分析目标: 批量理解多个变量的相互关系
+    方法选择:
+      变量数 ≤ 6 → pairplot (配对散点矩阵, 信息最全)
+      变量数 > 6 → correlation (热力图更紧凑)
+      两者也可组合: 先 correlation 扫描, 有高相关的对再用 scatter 细看
+    推荐步骤:
+      - {type: eda, method: correlation, 理由: "热力图一览所有变量对的相关性"}
+      - 可选: {type: eda, method: pairplot, 理由: "散点矩阵看非线性模式和聚类"}
+    泰坦尼克示例:
+      用户: "哪些特征和 Survived 相关"
+      → correlation(columns=[Survived,Pclass,Age,SibSp,Parch,Fare])
+      → 发现: Pclass 负相关(低舱位→低生还), Fare 正相关(高票价→高生还)
+      → 注意: 相关≠因果, Pclass和Fare高度共线, 通常只保留一个
+
+  # ── 寻找关键因素类 ──
+  - 意图: 找到最重要的影响因素
+    典型表述:
+      - "什么因素影响..." "最重要的特征" "关键因子"
+      - "影响因素排序" "哪些变量贡献最大"
+      - "特征重要性" "变量筛选"
+    分析目标: 从众多特征中找出对目标影响最大的几个
+    推荐步骤:
+      - {type: eda, method: correlation, params: {columns: [目标+所有数值列]}, 理由: "快速筛查线性相关的特征"}
+      - {type: model, method: importance, params: {target, model_type: random_forest}, 理由: "RF特征重要性捕获非线性关系，比纯相关性更全面"}
+    为什么两步互补:
+      - "correlation 只看线性关系, importance 能捕获非线性+交互效应"
+      - "correlation 有热力图直观, importance 有排名量化"
+      - "两者结果一致 → 结论更可靠; 不一致 → 说明存在非线性关系, 值得深挖"
+    泰坦尼克示例:
+      用户: "什么因素影响了生存率"
+      → correlation → Sex/Pclass/Fare 与 Survived 相关
+      → importance(random_forest) → Sex 最重要(~30%), Pclass 次之(~20%)
+      → 解释: "女士儿童优先"原则 + 社会经济地位决定命运
+
+  # ── 预测建模类 ──
+  - 意图: 构建预测模型
+    典型表述:
+      - "预测" "建模" "训练模型" "机器学习"
+      - "准确率" "分类" "回归" "评估"
+      - "用什么模型" "模型对比"
+    分析目标: 端到端建模, 从清洗到评估
+    模型选择决策:
+      目标连续(回归) → linear / ridge / lasso (可解释性强) 或 random_forest / xgboost (精度高)
+      目标分类 → random_forest / xgboost (默认首选)
+      样本量 < 1000 → 必须交叉验证; 优先简单模型(linear, 逻辑回归)
+      样本量 > 10000 → 可以用复杂模型; 调参收益更大
+    推荐步骤:
+      - {type: clean, 理由: "缺失值和异常值会严重影响模型效果"}
+      - {type: feature, 理由: "特征工程(标准化/编码/选择)通常比模型选择带来更大提升"}
+      - {type: model, method: train, 理由: "训练并评估基础模型"}
+      - 可选: {type: model, method: importance, 理由: "解释模型, 让工程师理解预测依据"}
+      - 可选: {type: model, method: residual, 理由: "残差诊断发现模型短板"}
+    泰坦尼克示例:
+      用户: "用随机森林预测生存"
+      → clean: drop(Cabin, Ticket, PassengerId) + fill_missing(Age, median)
+      → feature: encode(Sex, Embarked) + 可选 scale(Age, Fare)
+      → model: train(target=Survived, model_type=random_forest)
+      → importance: 看哪些特征贡献最大
+      → 评估: accuracy ~80-83%, 特征工程充分可到 83%+
+
+  # ── 数据清洗类 ──
+  - 意图: 处理数据质量问题
+    典型表述:
+      - "清洗数据" "处理缺失值" "有没有缺失"
+      - "异常值" "去重" "删除列" "数据质量"
+      - "...列有缺失怎么办"
+    分析目标: 提升数据质量
+    方法选择:
+      用户提到"缺失值" → fill_missing 或 drop_columns
+      用户提到"异常值" → detect_outliers
+      用户提到"重复" → dedup
+      用户笼统说"清洗" → 全量清洗流水线
+    填充策略选择:
+      数值列(有偏) → median (稳健, 不受极端值影响)
+      数值列(对称) → mean
+      分类列 → mode (众数)
+      有条件 → 分组填充优于全局 (如 Age 按 Pclass+Sex 分组取中位数)
+    泰坦尼克示例:
+      用户: "Age 有缺失怎么处理"
+      → 不建议全局均值(掩盖群体差异)
+      → 建议: fill_missing(Age, median, groupby=[Pclass, Sex])
+      → 理由: 头等舱乘客年龄偏大, 三等舱偏年轻, 分组填充更准确
+
+  # ── 特征构造类 ──
+  - 意图: 从原始数据构造新特征
+    典型表述:
+      - "构造特征" "创建新列" "特征工程"
+      - "标准化" "归一化" "编码" "OneHot"
+      - "降维" "特征选择" "过滤"
+    分析目标: 将原始数据转化为更适合建模的特征
+    方法选择:
+      数值列量纲差异大 → scale (标准化用于线性模型, 归一化用于距离模型)
+      分类列 → encode (OneHot用于无序分类, Label用于有序分类)
+      特征太多 → variance_filter (去除方差过低的) + correlation_select (保留与目标相关的)
+    注意: 树模型(RF/XGBoost)不需要标准化; 线性模型需要
+    泰坦尼克示例:
+      用户: "从 Name 列提取有用信息"
+      → 不能直接用 Name (字符串), 但可提取 Title(Mr/Mrs/Miss/Master)
+      → Title 隐含性别+年龄+社会地位, 是高价值特征
+      → Name 列本身是唯一标识, 建模时移除
+
+
+# ══════════════════════════════════════════════
+# 第二部分: 步骤组合模式
+# 常见分析场景的步骤链, 展示"为什么这样组合"
+# ══════════════════════════════════════════════
+
+步骤组合模式:
+
+  # ── 模式1: 快速数据体检 ──
+  - 模式名: 快速数据体检
+    适用场景: 用户刚拿到数据, 想快速了解全貌
+    步骤链:
+      - {type: eda, method: describe, params: {}, 解释: "文本统计摘要, 零图表开销"}
+      - {type: eda, method: distribution, params: {columns: [前6个数值列]}, 解释: "分布图看形态"}
+    为什么这样组合:
+      - "describe 给出精确数值(均值/标准差/分位数), distribution 给出直观形状"
+      - "两者互补: describe 看不出偏态方向, distribution 看不出精确分位数"
+      - "先 describe 再 distribution: 从统计数字中发现可疑点, 再用图表验证"
+    变体:
+      - "用户指定了关心的列 → 只分析那些列"
+      - "数据很大(>10万行) → 可以只做 describe, 跳过图表节省时间"
+
+  # ── 模式2: 寻找关键影响因素 ──
+  - 模式名: 寻找关键影响因素
+    适用场景: 用户想知道什么在影响目标变量
+    步骤链:
+      - {type: eda, method: correlation, params: {columns: [目标+数值列], method: pearson}, 解释: "线性关系扫描"}
+      - {type: model, method: importance, params: {target: 目标, model_type: random_forest}, 解释: "非线性+交互效应"}
+    为什么这样组合:
+      - "correlation 告诉你'线性相关', importance 告诉你'整体重要'"
+      - "两者都高 → 该特征确实关键; correlation低但importance高 → 存在非线性关系值得深挖"
+      - "这个组合是最常用的分析链路之一"
+    输出解读:
+      - "correlation 热力图: 红色=正相关, 蓝色=负相关, 颜色越深关系越强"
+      - "importance 柱状图: 柱子越高贡献越大, 通常前3个特征贡献>50%"
+
+  # ── 模式3: 两变量深度分析 ──
+  - 模式名: 两变量深度分析
+    适用场景: 用户关心两个具体变量的关系
+    步骤链:
+      - {type: eda, method: scatter, params: {x, y, trendline: true}, 解释: "散点图看形态+趋势线量化"}
+      - 可选: {type: eda, method: correlation, params: {columns: [x, y]}, 解释: "精确相关系数"}
+    为什么这样组合:
+      - "散点图回答'关系长什么样'(线性?曲线?聚类?异常?), 相关系数回答'关系有多强'"
+      - "只看相关系数可能被误导: r≈0 不代表没关系, 可能是U型曲线"
+      - "两者互相验证"
+
+  # ── 模式4: 清洗→探索→建模 全流程 ──
+  - 模式名: 端到端建模
+    适用场景: 用户想做完整的预测分析
+    步骤链:
+      - {type: clean, 解释: "先处理数据质量, 否则垃圾进垃圾出"}
+      - {type: eda, 解释: "理解特征分布和关系, 指导后续特征工程方向"}
+      - {type: feature, 解释: "构造/选择/编码特征, 往往比换模型效果更好"}
+      - {type: model, 解释: "训练+评估+解释"}
+    为什么这个顺序:
+      - "clean 必须在 feature 前: 缺失值影响编码, 异常值影响标准化"
+      - "eda 指导 feature: 从 eda 中发现 Age 右偏 → feature 中做 log 变换或分箱"
+      - "feature 的质量决定 model 的上限, 模型选择只是逼近这个上限"
+    注意:
+      - "用户可能只想走其中几步, 不是每次都要全流程"
+      - "如果用户说'快速建模试试', 可以跳过详细 eda, 直接 clean + model"
+
+
+# ══════════════════════════════════════════════
+# 第三部分: 泰坦尼克号案例完整演练
+# 展示从需求到步骤的完整推理过程
+# ══════════════════════════════════════════════
+
+泰坦尼克号案例演练:
+
+  数据集背景:
+    rows: 891
+    target: Survived (0=遇难 38%, 1=生还 62%)
+    key_columns:
+      - {name: Pclass, type: 分类(1/2/3), meaning: 客舱等级}
+      - {name: Sex, type: 分类(male/female), meaning: 性别}
+      - {name: Age, type: 数值, meaning: 年龄, missing: "~20%"}
+      - {name: SibSp, type: 数值, meaning: 船上兄弟姐妹/配偶数}
+      - {name: Parch, type: 数值, meaning: 船上父母/子女数}
+      - {name: Fare, type: 数值, meaning: 票价}
+      - {name: Embarked, type: 分类(C/Q/S), meaning: 登船港口}
+      - {name: Cabin, type: 字符串, meaning: 客舱号, missing: ">77%"}
+      - {name: Ticket, type: 字符串, meaning: 船票号}
+      - {name: Name, type: 字符串, meaning: 乘客姓名含称谓}
+
+  场景1_用户说"看看数据基本情况":
+    推理过程:
+      - 意图: 数据概览
+      - 关键信息需求: 行数列数、各列类型、基本统计量、缺失情况
+      - 选择: describe(统计摘要) + distribution(分布图)
+    输出步骤:
+      - {type: eda, method: describe, params: {}}
+      - {type: eda, method: distribution, params: {columns: [Age, Fare, SibSp, Parch]}}
+    预期发现:
+      - "891行12列, Age缺失20%, Cabin缺失77%"
+      - "Fare高度右偏(均值远大于中位数), Age近似正态"
+      - "Survived均值0.38 → 生还率38%"
+
+  场景2_用户说"什么因素影响了生存率":
+    推理过程:
+      - 意图: 寻找关键因素
+      - 需要两步互补: 先 correlation 快速扫描, 再 importance 精确定量
+      - 注意: Sex是分类变量, 需要先 label encode 才能进 correlation
+    输出步骤:
+      - {type: eda, method: correlation, params: {columns: [Survived, Pclass, Age, SibSp, Parch, Fare]}}
+      - {type: model, method: importance, params: {target: Survived, model_type: random_forest}}
+    预期输出:
+      - "correlation: Pclass(-0.34) Fare(+0.26) 与Survived线性相关"
+      - "importance: Sex最重要(~30%), Pclass(~20%), Age(~15%), Fare(~12%)"
+      - "Sex没出现在correlation中(它是分类列), 但在importance中排第一"
+
+  场景3_用户说"用随机森林预测生还,看准确率":
+    推理过程:
+      - 意图: 预测建模
+      - 端到端流程: clean → feature → model
+      - 关键决策: Cabin缺失>77%直接删; Age用分组中位数填充; Name提取Title后删
+    输出步骤:
+      - {type: clean, method: drop_columns, params: {columns: [Cabin, Ticket, PassengerId]}}
+      - {type: clean, method: fill_missing, params: {columns: [Age], strategy: median}}
+      - {type: feature, method: encode, params: {columns: [Sex, Embarked], encode_method: onehot}}
+      - {type: model, method: train, params: {target: Survived, model_type: random_forest}}
+    预期结果: "准确率 ~80-83%"
+
+  场景4_用户说"年龄和票价对生还有影响吗":
+    推理过程:
+      - 意图: 两变量关系(但涉及三个变量: Age, Fare, Survived)
+      - Age vs Survived: 分布分析(不同生还状态下的年龄分布)
+      - Fare vs Survived: 类似
+      - 也看 Age vs Fare 的关系
+    输出步骤:
+      - {type: eda, method: scatter, params: {x: Age, y: Fare, color: Survived}}
+      - {type: eda, method: correlation, params: {columns: [Age, Fare, Survived]}}
+    预期发现: "高票价+中年乘客生还率更高; 低票价+年轻乘客也有生还(可能是大家庭)"
+
+  场景5_用户说"清洗数据":
+    推理过程:
+      - 意图: 数据清洗
+      - 需要判断哪些列要删(Cabin缺失>77%→删, PassengerId是编号→删, Ticket无预测价值→删)
+      - Age按分组填充, Embarked用众数填充
+    输出步骤:
+      - {type: clean, method: drop_columns, params: {columns: [PassengerId, Cabin, Ticket]}}
+      - {type: clean, method: fill_missing, params: {columns: [Age], strategy: median}}
+      - {type: clean, method: fill_missing, params: {columns: [Embarked], strategy: mode}}
+      - {type: clean, method: detect_outliers, params: {columns: [Age, Fare], outlier_method: iqr}}
+    预期输出: "删除3列, 填充2列缺失值, 检测到Fare有部分离群值"
+
+
+# ══════════════════════════════════════════════
+# 第四部分: 执行前检查清单
+# 生成分析计划前必须验证的事项
+# ══════════════════════════════════════════════
+
+执行前检查:
+
+  列名验证:
+    - "用户提到的列名在数据中真的存在吗? 用模糊匹配找最相似的列名"
+    - "不存在时要告知用户, 并列出可用的列名"
+
+  类型合理性:
+    - "对分类列做了相关性分析? 不合理 — 只有数值列可以"
+    - "对数值列做编码? 不合理 — 编码是给分类列的"
+    - "目标列存在吗? 不存在就无法建模"
+
+  步骤依赖:
+    - "建模前数据有缺失值吗? 有缺失 → 先 fill_missing 或 drop_columns"
+    - "标准化前分类列编码了吗? 先 encode 再 scale"
+    - "特征选择前目标列是数值吗? correlation_select 需要数值目标"
+
+  需求澄清:
+    - "用户需求太模糊('分析数据')→ 先做 describe, 然后引导用户细化"
+    - "用户提到了不存在的方法('做聚类分析')→ 告知当前可用的方法"
+    - "用户同时提到多个独立分析 → 可以拆成多个步骤, 每个步骤专注一件事"
+
+  步骤粒度:
+    - "每个步骤只做一件事: 与其一个大步骤'探索+建模', 不如两个独立步骤"
+    - "原子方法优于全量流水线: 用户说'只看相关性', 就用 method: correlation, 不要跑整个EDA"
+    - "步骤数控制在1-6个: 太少不够, 太多用户看不懂"
+
+
+# ══════════════════════════════════════════════
+# 第五部分: 可用原子方法速查
+# ══════════════════════════════════════════════
+
+可用方法速查:
+  clean:
+    - {method: dedup, 用途: 删除重复行, params: {subset: "可选去重列"}}
+    - {method: fill_missing, 用途: 填充缺失值, params: {columns, strategy: mean/median/mode/constant, fill_value}}
+    - {method: detect_outliers, 用途: 检测异常值, params: {columns, outlier_method: iqr/zscore, threshold}}
+    - {method: drop_columns, 用途: 删除指定列, params: {columns: ["列名1","列名2"]}}
+  eda:
+    - {method: correlation, 用途: 相关性矩阵热力图, params: {columns, corr_method: pearson/spearman}}
+    - {method: distribution, 用途: 单列直方图+箱线图, params: {columns}}
+    - {method: scatter, 用途: 散点图+趋势线, params: {x, y, color, trendline}}
+    - {method: line, 用途: 折线图, params: {x, y, group_by}}
+    - {method: pairplot, 用途: 多列配对散点矩阵, params: {columns}}
+    - {method: describe, 用途: 纯文本统计摘要, params: {columns}}
+  feature:
+    - {method: scale, 用途: 标准化/归一化, params: {columns, scale_method: standard/minmax}}
+    - {method: encode, 用途: 分类编码, params: {columns, encode_method: onehot/label}}
+    - {method: variance_filter, 用途: 低方差特征过滤, params: {threshold}}
+    - {method: correlation_select, 用途: 相关性特征选择, params: {target, k, sel_method: f_regression/mutual_info}}
+  model:
+    - {method: train, 用途: 训练+评估, params: {target, model_type: random_forest/xgboost/linear/ridge/lasso}}
+    - {method: importance, 用途: 特征重要性柱状图, params: {target, model_type: random_forest}}
+    - {method: residual, 用途: 残差诊断图, params: {target, model_type: linear}}

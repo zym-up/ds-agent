@@ -642,8 +642,42 @@ async def get_chart(project_id: str, chart_name: str):
 # Static Files (production)
 # ──────────────────────────────────────────────
 
-if os.path.exists("frontend/dist"):
-    app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend")
+# 获取 fastapi-app 目录的绝对路径
+fastapi_app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+frontend_dist = os.path.join(fastapi_app_dir, "frontend", "dist")
+
+print(f"查找前端文件: {frontend_dist}")
+
+if os.path.exists(frontend_dist) and os.path.exists(os.path.join(frontend_dist, "index.html")):
+    # 关键：使用 StaticFiles 并正确设置 headers
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
+    
+    # 处理 index.html 和其他路由
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # API 请求不处理
+        if full_path.startswith("api/") or full_path.startswith("docs"):
+            raise HTTPException(status_code=404)
+        
+        # 如果请求的是静态文件且存在，直接返回
+        file_path = os.path.join(frontend_dist, full_path)
+        if os.path.exists(file_path) and not os.path.isdir(file_path):
+            # 根据文件扩展名设置正确的 MIME 类型
+            if file_path.endswith('.js'):
+                return FileResponse(file_path, media_type='application/javascript')
+            elif file_path.endswith('.css'):
+                return FileResponse(file_path, media_type='text/css')
+            elif file_path.endswith('.html'):
+                return FileResponse(file_path, media_type='text/html')
+            else:
+                return FileResponse(file_path)
+        
+        # 其他情况返回 index.html
+        return FileResponse(os.path.join(frontend_dist, "index.html"), media_type='text/html')
+    
+    print(f"✅ 前端服务已启动: {frontend_dist}")
+else:
+    print(f"❌ 找不到前端文件: {frontend_dist}")
 
 
 if __name__ == "__main__":

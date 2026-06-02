@@ -642,8 +642,78 @@ async def get_chart(project_id: str, chart_name: str):
 # Static Files (production)
 # ──────────────────────────────────────────────
 
-if os.path.exists("frontend/dist"):
-    app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend")
+from fastapi.responses import HTMLResponse, Response
+import os
+
+# 获取 fastapi-app 目录的绝对路径
+fastapi_app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+frontend_dist = os.path.join(fastapi_app_dir, "frontend", "dist")
+
+print(f"查找前端文件: {frontend_dist}")
+
+def get_file_content_type(file_path: str) -> str:
+    """根据文件扩展名返回正确的 Content-Type"""
+    if file_path.endswith('.js'):
+        return 'application/javascript'
+    elif file_path.endswith('.css'):
+        return 'text/css'
+    elif file_path.endswith('.html'):
+        return 'text/html'
+    elif file_path.endswith('.json'):
+        return 'application/json'
+    elif file_path.endswith('.png'):
+        return 'image/png'
+    elif file_path.endswith('.jpg') or file_path.endswith('.jpeg'):
+        return 'image/jpeg'
+    elif file_path.endswith('.svg'):
+        return 'image/svg+xml'
+    elif file_path.endswith('.ico'):
+        return 'image/x-icon'
+    else:
+        return 'application/octet-stream'
+
+if os.path.exists(frontend_dist) and os.path.exists(os.path.join(frontend_dist, "index.html")):
+    
+    @app.get("/assets/{file_path:path}")
+    async def serve_assets(file_path: str):
+        """处理 assets 文件夹下的所有文件"""
+        full_path = os.path.join(frontend_dist, "assets", file_path)
+        if os.path.exists(full_path) and not os.path.isdir(full_path):
+            content_type = get_file_content_type(full_path)
+            with open(full_path, 'rb') as f:
+                content = f.read()
+            return Response(content=content, media_type=content_type)
+        raise HTTPException(status_code=404)
+    
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        """处理所有前端路由"""
+        # API 请求不处理
+        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi.json"):
+            raise HTTPException(status_code=404)
+        
+        # 完整的文件路径
+        file_path = os.path.join(frontend_dist, full_path)
+        
+        # 如果文件存在，直接返回
+        if os.path.exists(file_path) and not os.path.isdir(file_path):
+            content_type = get_file_content_type(file_path)
+            with open(file_path, 'rb') as f:
+                content = f.read()
+            return Response(content=content, media_type=content_type)
+        
+        # 其他情况返回 index.html（支持 Vue Router）
+        index_path = os.path.join(frontend_dist, "index.html")
+        if os.path.exists(index_path):
+            with open(index_path, 'rb') as f:
+                content = f.read()
+            return Response(content=content, media_type='text/html')
+        
+        raise HTTPException(status_code=404)
+    
+    print(f"✅ 前端服务已启动: {frontend_dist}")
+else:
+    print(f"❌ 找不到前端文件: {frontend_dist}")
 
 
 if __name__ == "__main__":

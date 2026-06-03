@@ -296,7 +296,7 @@ def _load_chart_html(project_id: str, step_index: int) -> str:
 
 
 @app.post("/api/analysis/execute")
-async def execute_step(req: StepExecuteRequest):
+async def execute_analysis_step(req: StepExecuteRequest):
     data = pm.load_project(req.project_id)
     df = data["dataframe"]
     state = data["state"]
@@ -346,7 +346,7 @@ async def execute_step(req: StepExecuteRequest):
 
 
 @app.post("/api/analysis/execute/stream")
-async def execute_step_stream(req: ExecuteStreamRequest):
+async def execute_analysis_step_stream(req: ExecuteStreamRequest):
     data = pm.load_project(req.project_id)
     df = data["dataframe"]
     state = data["state"]

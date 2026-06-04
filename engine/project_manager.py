@@ -1,5 +1,6 @@
 """分析项目管理模块"""
 import json
+import math
 import os
 import uuid
 import shutil
@@ -9,6 +10,7 @@ from typing import Optional
 import pandas as pd
 import plotly.graph_objs as go
 import plotly.io as pio
+from engine import sanitize_json
 
 
 class ProjectManager:
@@ -127,6 +129,7 @@ class ProjectManager:
 
     def save_state(self, project_id: str, state: dict) -> None:
         """保存分析状态"""
+        state = sanitize_json(state)
         serialized = {"steps": [], "current_step": state.get("current_step", 0)}
         for step in state.get("steps", []):
             s = dict(step)

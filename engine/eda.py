@@ -76,8 +76,12 @@ def scatter_plot(
     df: pd.DataFrame, x: str, y: str, color: Optional[str] = None, trendline: bool = True
 ) -> go.Figure:
     """散点图，可选趋势线"""
-    fig = px.scatter(df, x=x, y=y, color=color, trendline="ols" if trendline else None,
-                     title=f"{x} vs {y}")
+    try:
+        fig = px.scatter(df, x=x, y=y, color=color, trendline="ols" if trendline else None,
+                         title=f"{x} vs {y}")
+    except Exception:
+        fig = px.scatter(df, x=x, y=y, color=color, trendline=None,
+                         title=f"{x} vs {y}")
     fig.update_layout(height=500)
     return fig
 

@@ -129,7 +129,7 @@ class AnalysisAgent:
 分析步骤类型（type）及可用原子方法（method）：
 - clean: dedup(去重) / fill_missing(缺失值填充) / detect_outliers(异常值检测) / drop_columns(删除列)
   默认(不填method): 全量清洗流水线
-- eda: correlation(相关性矩阵) / distribution(分布直方图+箱线图) / scatter(散点图) / line(折线图) / pairplot(配对散点矩阵) / describe(统计摘要,无图)
+- eda: correlation(相关性矩阵) / distribution(分布直方图+箱线图) / scatter(散点图, 必须传x和y) / line(折线图, 必须传x和y) / pairplot(配对散点矩阵) / describe(统计摘要,无图)
   默认(不填method): 全量EDA流水线
 - feature: scale(标准化/归一化) / encode(分类编码) / variance_filter(低方差过滤) / correlation_select(相关性特征选择)
   默认(不填method): 按params子参数执行对应操作
@@ -141,9 +141,12 @@ class AnalysisAgent:
 - fill_missing: strategy 选 mean/median/mode/constant, 数值偏态用median, 分类用mode
 - detect_outliers: outlier_method 选 iqr/zscore, threshold 默认 1.5
 - correlation: corr_method 选 pearson/spearman, 面料数据推荐 spearman
+- scatter: **必须**传 x 和 y（列名）, 可选 color（分组着色）、trendline（趋势线，默认 true）
+- line: **必须**传 x 和 y（列名）, 可选 group_by（分组折线）
+- distribution: 可选 columns（指定列名列表），不传则自动取前6个数值列
 - scale: scale_method 选 standard/minmax, 树模型不需要标准化, 线性模型需要
 - encode: encode_method 选 onehot/label
-- train/importance/residual: model_type 选 random_forest/xgboost/linear/ridge/lasso
+- train/importance/residual: model_type 选 random_forest/xgboost/linear/ridge/lasso, **必须**传 target
 
 ### 组合模式参考
 - 快速体检: describe → distribution
@@ -237,8 +240,8 @@ class AnalysisAgent:
         except (json.JSONDecodeError, KeyError):
             return AnalysisPlan(steps=[], raw_response=response)
 
-    def _build_explain_messages(self, step, metrics: dict) -> list:
-        """构建结果解释的 messages，含上下文（explain_result 和 explain_result_stream 共用）"""
+    def _build_explain_messages(self, step, metrics: dict) -> tuple:
+        """构建结果解释的 messages，返回 (messages, user_content)"""
         current_msg = f"""请用汽车工程师能理解的语言解释以下分析结果：
 
 步骤类型: {step.type}
@@ -246,22 +249,24 @@ class AnalysisAgent:
 分析结果: {json.dumps(metrics, ensure_ascii=False)}
 
 请用 3-5 句话解释这些数字的含义，以及它们对工程师意味着什么。"""
-        return self._build_messages_with_context(current_msg)
+        return self._build_messages_with_context(current_msg), current_msg
 
     def explain_result(self, step: AnalysisStep, metrics: dict) -> str:
         """用自然语言解释分析结果"""
-        messages = self._build_explain_messages(step, metrics)
+        messages, user_msg = self._build_explain_messages(step, metrics)
         explanation = self.llm.chat(messages)
+        self.chat_history.append({"role": "user", "content": user_msg})
         self.chat_history.append({"role": "assistant", "content": explanation})
         return explanation
 
     def explain_result_stream(self, step, metrics: dict):
         """流式解释分析结果，逐 chunk yield 文本"""
-        messages = self._build_explain_messages(step, metrics)
+        messages, user_msg = self._build_explain_messages(step, metrics)
         full_text = ""
         for chunk in self.llm.chat_stream(messages):
             full_text += chunk
             yield chunk
+        self.chat_history.append({"role": "user", "content": user_msg})
         self.chat_history.append({"role": "assistant", "content": full_text})
 
     def summarize_conclusions(self, step_results: list, user_notes: str = ""):
@@ -284,6 +289,7 @@ class AnalysisAgent:
         for chunk in self.llm.chat_stream(messages):
             full_text += chunk
             yield chunk
+        self.chat_history.append({"role": "user", "content": current_msg})
         self.chat_history.append({"role": "assistant", "content": full_text})
 
     def suggest_name(self, context: str) -> str:

@@ -12,4 +12,18 @@
 - sandbox: 安全代码执行
 """
 
+import math
+
 __version__ = "0.1.0"
+
+
+def sanitize_json(obj):
+    """递归替换 NaN/Infinity 为 None，确保 JSON 兼容"""
+    if isinstance(obj, dict):
+        return {k: sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_json(v) for v in obj]
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+    return obj

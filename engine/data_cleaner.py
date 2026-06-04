@@ -31,7 +31,7 @@ def fill_missing(
     df: pd.DataFrame,
     strategy: str = "mean",
     columns: Optional[list] = None,
-    fill_value: any = None,
+    fill_value=None,
 ) -> tuple:
     """填充缺失值: strategy: 'mean' | 'median' | 'mode' | 'constant'"""
     targets = columns or df.columns.tolist()

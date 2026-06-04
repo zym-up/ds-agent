@@ -63,7 +63,10 @@ def _clean(method, params, df):
     if method == "dedup":
         subset = params.get("subset")
         result_df, info = remove_duplicates(df, subset=subset)
-        text = f"### 去重完成\n- 去重前: {info['去除前']}\n- 去重后: {info['去除后']}\n- 删除: {info['删除重复行数']} 行"
+        before = info.get("去重前", list(info.values())[0] if info else "?")
+        after = info.get("去重后", list(info.values())[1] if len(info) > 1 else "?")
+        removed = info.get("删除重复行数", list(info.values())[2] if len(info) > 2 else "?")
+        text = f"### 去重完成\n- 去重前: {before}\n- 去重后: {after}\n- 删除: {removed} 行"
         metrics = info
         return {"charts": [], "text": text, "metrics": metrics, "result_df": result_df}
 
@@ -132,18 +135,27 @@ def _eda(method, params, df):
         return {"charts": figs, "text": text, "metrics": {"列数": len(cols)}}
 
     elif method == "scatter":
-        has_xy = params.get("x") and params.get("y")
-        fig = scatter_plot(df, x=params["x"], y=params["y"],
+        if not (params.get("x") and params.get("y")):
+            return {"charts": [], "text": "### 散点图\n- 错误: 未指定 x 或 y 轴列", "metrics": {}}
+        x_col, y_col = params["x"], params["y"]
+        if x_col not in df.columns or y_col not in df.columns:
+            return {"charts": [], "text": f"### 散点图\n- 错误: 列 '{x_col}' 或 '{y_col}' 不存在", "metrics": {}}
+        fig = scatter_plot(df, x=x_col, y=y_col,
                            color=params.get("color"), trendline=params.get("trendline", True))
-        text = f"### 散点图: {params['x']} vs {params['y']}"
-        return {"charts": [fig], "text": text, "metrics": {"x": params["x"], "y": params["y"]}}
+        text = f"### 散点图: {x_col} vs {y_col}"
+        return {"charts": [fig], "text": text, "metrics": {"x": x_col, "y": y_col}}
 
     elif method == "line":
-        fig = line_plot(df, x=params["x"], y=params["y"], group_by=params.get("group_by"))
-        text = f"### 折线图: {params['y']} vs {params['x']}"
+        if not (params.get("x") and params.get("y")):
+            return {"charts": [], "text": "### 折线图\n- 错误: 未指定 x 或 y 轴列", "metrics": {}}
+        x_col, y_col = params["x"], params["y"]
+        if x_col not in df.columns or y_col not in df.columns:
+            return {"charts": [], "text": f"### 折线图\n- 错误: 列 '{x_col}' 或 '{y_col}' 不存在", "metrics": {}}
+        fig = line_plot(df, x=x_col, y=y_col, group_by=params.get("group_by"))
+        text = f"### 折线图: {y_col} vs {x_col}"
         if params.get("group_by"):
             text += f" (按 {params['group_by']} 分组)"
-        return {"charts": [fig], "text": text, "metrics": {"x": params["x"], "y": params["y"]}}
+        return {"charts": [fig], "text": text, "metrics": {"x": x_col, "y": y_col}}
 
     elif method == "pairplot":
         cols = numeric_cols[:6] if len(numeric_cols) > 6 else numeric_cols
@@ -174,11 +186,11 @@ def _eda(method, params, df):
         # 全量 EDA 流水线
         result = eda_pipeline(df, numeric_columns=numeric_cols)
         text = f"### 探索性分析\n- 行数: {result['row_count']}\n- 列数: {result['column_count']}"
-        stats_summary = {}
-        for k, v in result.get("stats_summary", {}).items():
-            stats_summary[k] = str(v)
+        numeric_col_count = len(result.get("numeric_stats", {}))
+        cat_col_count = len(result.get("categorical_stats", {}))
         return {"charts": result["charts"], "text": text,
-                "metrics": {"行数": result["row_count"], "列数": result["column_count"], "统计摘要": stats_summary}}
+                "metrics": {"行数": result["row_count"], "列数": result["column_count"],
+                            "数值列数": numeric_col_count, "分类列数": cat_col_count}}
 
 
 # ──────────────────────────────────────────────

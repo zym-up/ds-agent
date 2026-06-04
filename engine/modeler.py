@@ -23,27 +23,36 @@ def split_data(df: pd.DataFrame, target: str, test_size: float = 0.2, random_sta
     return train_test_split(X, y, test_size=test_size, random_state=random_state)
 
 
-def train_regression(
-    X_train: pd.DataFrame, y_train: pd.Series, model_type: ModelType = "linear", **kwargs
-) -> tuple:
-    """训练回归模型"""
-    models = {
-        "linear": LinearRegression(**kwargs),
-        "ridge": Ridge(alpha=kwargs.pop("alpha", 1.0)),
-        "lasso": Lasso(alpha=kwargs.pop("alpha", 1.0)),
-        "random_forest": RandomForestRegressor(
+def _build_regression_model(model_type: str, **kwargs) -> tuple:
+    """按类型构造单个回归模型（避免 dict literal 一次性构造所有模型）"""
+    if model_type == "linear":
+        return LinearRegression(**kwargs)
+    elif model_type == "ridge":
+        return Ridge(alpha=kwargs.pop("alpha", 1.0))
+    elif model_type == "lasso":
+        return Lasso(alpha=kwargs.pop("alpha", 1.0))
+    elif model_type == "random_forest":
+        return RandomForestRegressor(
             n_estimators=kwargs.pop("n_estimators", 100),
             max_depth=kwargs.pop("max_depth", None),
             random_state=42,
-        ),
-        "xgboost": xgb.XGBRegressor(
+        )
+    elif model_type == "xgboost":
+        return xgb.XGBRegressor(
             n_estimators=kwargs.pop("n_estimators", 100),
             max_depth=kwargs.pop("max_depth", 6),
             learning_rate=kwargs.pop("learning_rate", 0.1),
             random_state=42,
-        ),
-    }
-    model = models[model_type]
+        )
+    else:
+        raise ValueError(f"不支持的模型类型: {model_type}")
+
+
+def train_regression(
+    X_train: pd.DataFrame, y_train: pd.Series, model_type: ModelType = "linear", **kwargs
+) -> tuple:
+    """训练回归模型"""
+    model = _build_regression_model(model_type, **kwargs)
     model.fit(X_train, y_train)
     params = model.get_params() if hasattr(model, "get_params") else {}
     return model, {"模型": model_type, "参数": {k: str(v) for k, v in params.items()}}

@@ -1,18 +1,14 @@
 <template>
   <div>
-    <!-- 报告预览模式 -->
     <div v-if="projectStore.reportPreviewMode">
       <ReportPreview @back="projectStore.reportPreviewMode = false" />
     </div>
 
-    <!-- 无项目提示 -->
     <div v-else-if="!projectStore.currentId">
       <el-empty description="请先新建项目，或从侧边栏「📁 历史项目」中打开已有项目" />
     </div>
 
-    <!-- 主分析界面 -->
     <div v-else>
-      <!-- 工具栏 -->
       <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px">
         <el-button @click="showProjectInfo = true; loadProjectInfo()" type="primary" plain>
           📊 {{ projectStore.currentName }}
@@ -27,12 +23,36 @@
 
       <el-divider style="margin: 8px 0" />
 
-      <!-- 三栏布局 -->
       <div style="display: flex; gap: 12px; height: calc(100vh - 180px)">
-        <!-- 左栏: 对话 (25%) -->
+        <!-- 左栏: 对话 + 轮次 (25%) -->
         <div style="width: 25%; display: flex; flex-direction: column; border: 1px solid #eee; border-radius: 8px">
           <div style="padding: 8px 12px; font-weight: 600; border-bottom: 1px solid #eee; font-size: 14px">💬 对话</div>
           <div style="flex: 1; overflow-y: auto; padding: 8px 12px" ref="chatListEl">
+            <!-- 轮次列表 -->
+            <div v-if="projectStore.rounds.length" style="margin-bottom: 8px">
+              <div style="font-size: 11px; color: #999; margin-bottom: 4px; padding: 0 4px">对话轮次 (点击切换)</div>
+              <div v-for="(rnd, ri) in projectStore.rounds" :key="ri"
+                   @click="projectStore.setCurrentRound(ri)"
+                   :style="{
+                     padding: '8px 10px', margin: '4px 0', borderRadius: '6px', fontSize: '12px',
+                     cursor: 'pointer', transition: 'all 0.15s',
+                     border: ri === projectStore.currentRound ? '1px solid #1a73e8' : '1px solid #ddd',
+                     background: ri === projectStore.currentRound ? '#e8f0fe' : '#f5f5f5'
+                   }">
+                <div style="font-weight: 600; margin-bottom: 3px; display: flex; align-items: center; gap: 4px">
+                  <span>🔄 第{{ ri + 1 }}轮</span>
+                  <span v-if="ri === projectStore.currentRound" style="font-size: 10px; color: #1a73e8">(当前)</span>
+                </div>
+                <div style="color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 2px">
+                  {{ (rnd.user_input || '未命名').slice(0, 50) }}
+                </div>
+                <div style="color: #999; font-size: 11px">
+                  {{ rnd.steps?.filter(s => s.status === 'done').length || 0 }}/{{ rnd.steps?.length || 0 }} 步骤完成
+                </div>
+              </div>
+            </div>
+            <el-divider v-if="projectStore.rounds.length" style="margin: 8px 0" />
+
             <div v-for="(msg, i) in projectStore.chatHistory" :key="i" style="margin-bottom: 10px">
               <div v-if="msg.role === 'user'" style="color: #1a73e8; font-size: 12px; margin-bottom: 2px">👤 你</div>
               <div v-else style="color: #34a853; font-size: 12px; margin-bottom: 2px">🤖 Agent</div>
@@ -53,9 +73,13 @@
 
         <!-- 中栏: 结果 (50%) -->
         <div style="width: 50%; border: 1px solid #eee; border-radius: 8px; display: flex; flex-direction: column">
-          <div style="padding: 8px 12px; font-weight: 600; border-bottom: 1px solid #eee; font-size: 14px">📈 结果</div>
+          <div style="padding: 8px 12px; font-weight: 600; border-bottom: 1px solid #eee; font-size: 14px">
+            📈 结果
+            <span v-if="projectStore.currentRound >= 0" style="color: #999; font-size: 12px; margin-left: 8px">
+              (第{{ projectStore.currentRound + 1 }}轮)
+            </span>
+          </div>
           <div style="flex: 1; overflow-y: auto; padding: 12px">
-            <!-- 查看历史步骤 -->
             <template v-if="projectStore.viewingStepIndex >= 0">
               <div v-if="viewingStep.llm_explanation" style="background: #e8f0fe; border-left: 3px solid #1a73e8; padding: 10px 12px; border-radius: 4px; margin-bottom: 12px; font-size: 13px">
                 🤖 <b>AI 解读:</b> {{ viewingStep.llm_explanation }}
@@ -63,7 +87,7 @@
               <div v-if="viewingStep.last_text" v-html="renderMarkdown(viewingStep.last_text)" style="font-size: 13px"></div>
               <div v-for="c in (viewingStep.chart_count || 0)" :key="'h'+c"
                    style="margin-top: 10px; border: 1px solid #eee; border-radius: 4px; overflow: hidden">
-                <iframe :src="chartUrl(projectStore.viewingStepIndex, c)" style="width: 100%; height: 400px; border: none" />
+                <iframe :src="chartUrl(viewingRoundIndex, projectStore.viewingStepIndex, c)" style="width: 100%; height: 400px; border: none" />
               </div>
             </template>
             <div v-else-if="currentResult">
@@ -73,7 +97,7 @@
               <div v-if="currentResult.text" v-html="renderMarkdown(currentResult.text)" style="font-size: 13px"></div>
               <div v-for="c in (currentResult.chart_count || 0)" :key="'c'+c"
                    style="margin-top: 10px; border: 1px solid #eee; border-radius: 4px; overflow: hidden">
-                <iframe :src="chartUrl(currentStepIndex, c)" style="width: 100%; height: 400px; border: none" />
+                <iframe :src="chartUrl(currentExecutingRound, currentStepIndex, c)" style="width: 100%; height: 400px; border: none" />
               </div>
             </div>
             <div v-else style="color: #999; display: flex; align-items: center; justify-content: center; height: 100%">
@@ -113,7 +137,7 @@
             </div>
             <div v-if="projectStore.steps.length && projectStore.steps.every(s => s.status === 'done')"
                  style="margin-top: 12px">
-              <el-alert title="所有步骤已完成！" type="success" :closable="false" style="font-size: 12px" />
+              <el-alert title="当前轮次所有步骤已完成！" type="success" :closable="false" style="font-size: 12px" />
             </div>
           </div>
         </div>
@@ -148,10 +172,12 @@
     <el-dialog v-model="showReportDialog" title="📋 导出分析报告" width="550px">
       <el-input v-model="reportTitle" placeholder="报告标题" style="margin-bottom: 16px" />
 
-      <div style="margin-bottom: 12px; font-size: 13px; color: #666">包含内容:</div>
+      <div style="margin-bottom: 12px; font-size: 13px; color: #666">
+        包含内容 (所有轮次已完成步骤):
+      </div>
       <el-checkbox-group v-model="reportSelectedSteps" style="display: flex; flex-direction: column; gap: 4px">
-        <el-checkbox v-for="(s, i) in projectStore.doneSteps" :key="i" :value="i" :label="(s.description || '').slice(0, 50)"
-                     style="font-size: 13px" />
+        <el-checkbox v-for="(s, i) in allDoneStepsFlat" :key="i" :value="i"
+                     :label="(s.description || '').slice(0, 50)" style="font-size: 13px" />
       </el-checkbox-group>
 
       <el-checkbox v-model="reportIncludeConclusion" style="margin: 12px 0">AI 综合分析结论</el-checkbox>
@@ -173,7 +199,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import {
   getProjectInfo, addDataFile, generateReport,
   streamPlan, streamExecute, streamConclude,
@@ -189,19 +215,18 @@ const userInput = ref('')
 const sending = ref(false)
 const executingIndex = ref(-1)
 const currentStepIndex = ref(-1)
+const currentExecutingRound = ref(-1)
+const viewingRoundIndex = ref(-1)
 const streamingResponse = ref('')
 const currentResult = ref(null)
 
-// 项目信息弹窗
 const showProjectInfo = ref(false)
 const projectInfo = ref(null)
 
-// 上传弹窗
 const showUploadDialog = ref(false)
 const pendingUploadFile2 = ref(null)
 const uploading = ref(false)
 
-// 报告弹窗
 const showReportDialog = ref(false)
 const reportTitle = ref('')
 const reportSelectedSteps = ref([])
@@ -209,7 +234,6 @@ const reportIncludeConclusion = ref(true)
 const reportUserNotes = ref('')
 const generatingReport = ref(false)
 
-// 查看步骤
 const viewingStep = computed(() => {
   const idx = projectStore.viewingStepIndex
   if (idx >= 0 && idx < projectStore.steps.length) {
@@ -218,8 +242,27 @@ const viewingStep = computed(() => {
   return {}
 })
 
-const chartUrl = (stepIdx, chartNum) =>
-  `/api/projects/${projectStore.currentId}/charts/step${stepIdx + 1}_chart${chartNum}.html`
+watch(() => projectStore.currentRound, () => {
+  viewingRoundIndex.value = -1
+  currentExecutingRound.value = -1
+  currentResult.value = null
+  currentStepIndex.value = -1
+})
+
+const allDoneStepsFlat = computed(() => {
+  const result = []
+  for (const r of projectStore.rounds) {
+    for (const s of (r.steps || [])) {
+      if (s.status === 'done') {
+        result.push({ ...s, round_user_input: r.user_input || '' })
+      }
+    }
+  }
+  return result
+})
+
+const chartUrl = (roundIdx, stepIdx, chartNum) =>
+  `/api/projects/${projectStore.currentId}/charts/round${roundIdx}_step${stepIdx + 1}_chart${chartNum}.html`
 
 const sendMessage = async () => {
   if (!userInput.value.trim()) return
@@ -233,11 +276,16 @@ const sendMessage = async () => {
     await streamPlan(
       projectStore.currentId, msg,
       (chunk) => { streamingResponse.value += chunk },
-      (steps) => {
-        projectStore.setSteps(steps || [])
+      (steps, roundIndex) => {
+        if (!steps || !steps.length) {
+          ElMessage.warning('AI 未能生成有效的分析计划，请尝试换一种描述方式')
+        } else {
+          projectStore.addRound(msg, streamingResponse.value, steps)
+        }
         projectStore.addChatMessage({ role: 'assistant', content: streamingResponse.value })
         streamingResponse.value = ''
         projectStore.viewingStepIndex = -1
+        viewingRoundIndex.value = -1
       }
     )
   } catch (e) {
@@ -250,6 +298,7 @@ const sendMessage = async () => {
 const runStep = async (index) => {
   projectStore.updateStep(index, { status: 'running' })
   executingIndex.value = index
+  currentExecutingRound.value = projectStore.currentRound
   currentResult.value = null
   streamingResponse.value = ''
 
@@ -286,10 +335,10 @@ const runStep = async (index) => {
 
 const viewStep = (index) => {
   projectStore.viewingStepIndex = index
+  viewingRoundIndex.value = projectStore.currentRound
   currentResult.value = null
 }
 
-// 项目信息
 const loadProjectInfo = async () => {
   if (!projectStore.currentId) return
   try {
@@ -300,7 +349,6 @@ const loadProjectInfo = async () => {
   }
 }
 
-// 上传文件
 const handleUploadFile = (file) => {
   pendingUploadFile2.value = file.raw
 }
@@ -322,16 +370,14 @@ const confirmUpload = async () => {
   }
 }
 
-// 报告弹窗默认值
 const openReportDialog = () => {
   reportTitle.value = `${projectStore.currentName} — 分析报告`
-  reportSelectedSteps.value = projectStore.doneSteps.map((_, i) => i)
+  reportSelectedSteps.value = allDoneStepsFlat.value.map((_, i) => i)
   reportIncludeConclusion.value = true
   reportUserNotes.value = ''
   showReportDialog.value = true
 }
 
-// 报告
 const generateAndPreview = async () => {
   const stepIndices = reportSelectedSteps.value
   generatingReport.value = true
@@ -340,7 +386,6 @@ const generateAndPreview = async () => {
   try {
     let conclusionText = ''
     if (reportIncludeConclusion.value) {
-      // 先流式生成结论（用户可见进度）
       try {
         await streamConclude(
           projectStore.currentId, stepIndices, reportUserNotes.value,
@@ -352,7 +397,6 @@ const generateAndPreview = async () => {
       }
     }
 
-    // 报告生成（传入已生成的结论，不再调 LLM，瞬时完成）
     await generateReport(
       projectStore.currentId, reportTitle.value,
       stepIndices, reportUserNotes.value, true, conclusionText,
@@ -381,7 +425,6 @@ const exportReport = async () => {
   }
 }
 
-// 简单 markdown 渲染 + XSS 防护
 const renderMarkdown = (text) => {
   if (!text) return ''
   let html = text

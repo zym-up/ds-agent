@@ -13,6 +13,61 @@ import plotly.io as pio
 from engine import sanitize_json
 
 
+def _restore_step_charts(step: dict) -> None:
+    """将 step 中序列化的 chart JSON 字符串还原为 go.Figure 对象"""
+    if "last_charts" not in step or not step["last_charts"]:
+        return
+    restored = []
+    for c in step["last_charts"]:
+        if isinstance(c, str):
+            try:
+                restored.append(pio.from_json(c))
+            except (ValueError, KeyError, TypeError):
+                try:
+                    import ast
+                    inner = c.strip()
+                    if inner.startswith("Figure("):
+                        inner = inner[7:-1]
+                    fig_dict = ast.literal_eval(inner)
+                    restored.append(pio.from_json(json.dumps(fig_dict)))
+                except Exception:
+                    pass
+        elif isinstance(c, go.Figure):
+            restored.append(c)
+    step["last_charts"] = restored
+
+
+def _serialize_step(step: dict) -> dict:
+    """将 step 转为可 JSON 序列化的 dict（figure → json 字符串）"""
+    s = dict(step)
+    if "last_charts" in s and s["last_charts"]:
+        s["last_charts"] = [
+            c.to_json() if isinstance(c, go.Figure) else c
+            for c in s["last_charts"]
+        ]
+    return s
+
+
+def _migrate_old_state(state: dict) -> dict:
+    """将旧版 flat steps 结构迁移为 rounds 结构"""
+    if "rounds" in state:
+        return state
+    old_steps = state.get("steps", [])
+    if not old_steps:
+        return {"rounds": [], "current_round": -1}
+    return {
+        "rounds": [{
+            "id": 1,
+            "user_input": "",
+            "plan_explanation": "",
+            "steps": old_steps,
+            "current_step": state.get("current_step", 0),
+            "created_at": "",
+        }],
+        "current_round": 0,
+    }
+
+
 class ProjectManager:
     """管理分析项目的创建、保存、加载"""
 
@@ -39,7 +94,7 @@ class ProjectManager:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
         with open(project_path / "state.json", "w", encoding="utf-8") as f:
-            json.dump({"steps": [], "current_step": 0}, f, ensure_ascii=False, indent=2)
+            json.dump({"rounds": [], "current_round": -1}, f, ensure_ascii=False, indent=2)
 
         with open(project_path / "chat_history.json", "w", encoding="utf-8") as f:
             json.dump([], f, ensure_ascii=False, indent=2)
@@ -61,14 +116,21 @@ class ProjectManager:
                         meta = json.load(f)
                     state_path = pdir / "state.json"
                     steps_count = 0
+                    rounds_count = 0
                     if state_path.exists():
                         with open(state_path, "r", encoding="utf-8") as f:
                             state = json.load(f)
+                        for r in state.get("rounds", []):
+                            steps_count += len(r.get("steps", []))
+                        rounds_count = len(state.get("rounds", []))
+                        # 兼容旧格式
+                        if "steps" in state:
                             steps_count = len(state.get("steps", []))
                     projects.append({
                         "id": pdir.name,
                         **meta,
                         "steps_count": steps_count,
+                        "rounds_count": rounds_count,
                     })
         projects.sort(key=lambda p: p["created_at"], reverse=True)
         return projects
@@ -82,32 +144,18 @@ class ProjectManager:
         with open(pdir / "meta.json", "r", encoding="utf-8") as f:
             meta = json.load(f)
 
-        state = {"steps": [], "current_step": 0}
         state_path = pdir / "state.json"
         if state_path.exists():
             with open(state_path, "r", encoding="utf-8") as f:
                 state = json.load(f)
-            for step in state.get("steps", []):
-                if "last_charts" in step and step["last_charts"]:
-                    restored = []
-                    for c in step["last_charts"]:
-                        if isinstance(c, str):
-                            try:
-                                restored.append(pio.from_json(c))
-                            except (ValueError, KeyError, TypeError):
-                                # 旧版损坏数据: Figure(...) repr 字符串 → 尝试提取 JSON
-                                try:
-                                    import ast
-                                    inner = c.strip()
-                                    if inner.startswith("Figure("):
-                                        inner = inner[7:-1]  # 去掉 "Figure(" 和 ")"
-                                    fig_dict = ast.literal_eval(inner)
-                                    restored.append(pio.from_json(json.dumps(fig_dict)))
-                                except Exception:
-                                    pass
-                        elif isinstance(c, go.Figure):
-                            restored.append(c)
-                    step["last_charts"] = restored
+            # 向后兼容：旧格式迁移
+            state = _migrate_old_state(state)
+            # 还原每个 round 中每个 step 的图表
+            for rnd in state.get("rounds", []):
+                for step in rnd.get("steps", []):
+                    _restore_step_charts(step)
+        else:
+            state = {"rounds": [], "current_round": -1}
 
         chat_history = []
         chat_path = pdir / "chat_history.json"
@@ -128,17 +176,14 @@ class ProjectManager:
         }
 
     def save_state(self, project_id: str, state: dict) -> None:
-        """保存分析状态"""
+        """保存分析状态（rounds 结构，向后兼容旧 flat steps 格式）"""
+        state = _migrate_old_state(state)
         state = sanitize_json(state)
-        serialized = {"steps": [], "current_step": state.get("current_step", 0)}
-        for step in state.get("steps", []):
-            s = dict(step)
-            if "last_charts" in s and s["last_charts"]:
-                s["last_charts"] = [
-                    c.to_json() if isinstance(c, go.Figure) else c
-                    for c in s["last_charts"]
-                ]
-            serialized["steps"].append(s)
+        serialized: dict = {"current_round": state.get("current_round", -1), "rounds": []}
+        for rnd in state.get("rounds", []):
+            sr = dict(rnd)
+            sr["steps"] = [_serialize_step(s) for s in rnd.get("steps", [])]
+            serialized["rounds"].append(sr)
 
         pdir = self.projects_dir / project_id
         with open(pdir / "state.json", "w", encoding="utf-8") as f:
@@ -249,9 +294,14 @@ class ProjectManager:
         reports = self.list_reports(project_id)
         state_path = pdir / "state.json"
         steps_count = 0
+        rounds_count = 0
         if state_path.exists():
             with open(state_path, "r", encoding="utf-8") as f:
                 state = json.load(f)
+            for r in state.get("rounds", []):
+                steps_count += len(r.get("steps", []))
+            rounds_count = len(state.get("rounds", []))
+            if "steps" in state:
                 steps_count = len(state.get("steps", []))
         return {
             "name": meta["name"],
@@ -259,5 +309,6 @@ class ProjectManager:
             "data_files_count": len(data_files),
             "total_rows": total_rows,
             "steps_count": steps_count,
+            "rounds_count": rounds_count,
             "reports_count": len(reports),
         }

@@ -83,13 +83,10 @@ const createProject = async () => {
   creating.value = true
   try {
     const res = await apiCreateProject(projectName.value, selectedFile.value)
+    projectStore.clearProject()
     projectStore.setProject(res.data.project_id, projectName.value)
     projectStore.dataFiles = res.data.data_files || []
     projectStore.selectedDataFiles = (res.data.data_files || []).map(f => f.name)
-    projectStore.setSteps([])
-    projectStore.chatHistory = []
-    projectStore.viewingStepIndex = -1
-    projectStore.reportPreviewMode = false
     ElMessage.success('项目创建成功，正在进入分析对话...')
     router.push('/analysis')
   } catch (e) {

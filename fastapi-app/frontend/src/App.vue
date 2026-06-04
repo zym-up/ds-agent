@@ -177,13 +177,12 @@ const openProject = async (p) => {
   if (p.id === projectStore.currentId) return
   try {
     const res = await getProject(p.id)
+    projectStore.clearProject()
     projectStore.setProject(p.id, p.name)
-    projectStore.setSteps(res.data.state?.steps || [])
+    projectStore.setRounds(res.data.state?.rounds || [], res.data.state?.current_round ?? -1)
     projectStore.chatHistory = res.data.chat_history || []
     projectStore.dataFiles = res.data.data_files || []
     projectStore.selectedDataFiles = (res.data.data_files || []).map(f => f.name)
-    projectStore.viewingStepIndex = -1
-    projectStore.reportPreviewMode = false
 
     const rRes = await listReports(p.id)
     reports.value = rRes.data

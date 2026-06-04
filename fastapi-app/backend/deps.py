@@ -30,13 +30,13 @@ def get_agent(project_id: str = None):
     return agent
 
 
-def load_chart_html(project_id: str, step_index: int) -> str:
-    """从磁盘加载步骤关联的图表 HTML"""
+def load_chart_html(project_id: str, round_index: int, step_index: int) -> str:
+    """从磁盘加载步骤关联的图表 HTML（含轮次前缀）"""
     chart_dir = os.path.join("projects", project_id, "charts")
     html_parts = []
     j = 1
     while j <= 100:
-        chart_path = os.path.join(chart_dir, f"step{step_index + 1}_chart{j}.html")
+        chart_path = os.path.join(chart_dir, f"round{round_index}_step{step_index + 1}_chart{j}.html")
         if os.path.exists(chart_path):
             with open(chart_path, "r", encoding="utf-8") as f:
                 html_parts.append(f.read())

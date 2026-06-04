@@ -1,4 +1,4 @@
-"""报告生成 + 下载 路由"""
+"""报告生成 + 下载 路由 — 支持多轮对话 rounds"""
 import json
 import os
 
@@ -11,33 +11,55 @@ from backend.models.schemas import GenerateReportRequest, ConcludeRequest
 router = APIRouter(tags=["reports"])
 
 
+def _collect_all_done_steps(state: dict) -> list:
+    """收集所有 rounds 中已完成的步骤，返回 [{round_idx, step_idx, step, user_input}]"""
+    result = []
+    for ri, rnd in enumerate(state.get("rounds", [])):
+        for si, step in enumerate(rnd.get("steps", [])):
+            if step.get("status") == "done":
+                result.append({
+                    "round_idx": ri,
+                    "step_idx": si,
+                    "step": step,
+                    "user_input": rnd.get("user_input", ""),
+                })
+    return result
+
+
 @router.post("/report/generate")
 async def generate_report(req: GenerateReportRequest):
     data = pm.load_project(req.project_id)
     state = data["state"]
-    all_steps = state.get("steps", [])
+    done_items = _collect_all_done_steps(state)
 
     if req.step_indices:
-        selected_steps = [all_steps[i] for i in req.step_indices if i < len(all_steps)]
+        # 筛选指定索引的步骤（兼容旧版 step_indices 是全局索引或按 round）
+        selected = []
+        for idx in req.step_indices:
+            if idx < len(done_items):
+                selected.append(done_items[idx])
     else:
-        selected_steps = [s for s in all_steps if s.get("status") == "done"]
+        selected = done_items
 
     sections = []
-    for i, step in enumerate(all_steps):
-        if step in selected_steps:
-            chart_html = load_chart_html(req.project_id, i)
-            sections.append(build_section(
-                title=step.get("description", ""),
-                text=step.get("llm_explanation", ""),
-                chart_html=chart_html,
-            ))
+    for item in selected:
+        chart_html = load_chart_html(req.project_id, item["round_idx"], item["step_idx"])
+        title = item["step"].get("description", "")
+        if item["user_input"]:
+            title = f"【{item['user_input']}】{title}"
+        sections.append(build_section(
+            title=title,
+            text=item["step"].get("llm_explanation", ""),
+            chart_html=chart_html,
+        ))
 
     conclusion = ""
     if req.conclusion:
         conclusion = req.conclusion
-    elif req.include_conclusion and selected_steps:
-        step_data = [{"type": s["type"], "explanation": s.get("llm_explanation", "")}
-                     for s in selected_steps]
+    elif req.include_conclusion and selected:
+        step_data = [{"type": s["step"]["type"],
+                      "explanation": s["step"].get("llm_explanation", "")}
+                     for s in selected]
         try:
             agent = get_agent(req.project_id)
             conclusion = "".join(list(agent.summarize_conclusions(step_data, req.user_notes)))
@@ -60,15 +82,16 @@ async def generate_report(req: GenerateReportRequest):
 async def conclude_stream(req: ConcludeRequest):
     data = pm.load_project(req.project_id)
     state = data["state"]
-    all_steps = state.get("steps", [])
+    done_items = _collect_all_done_steps(state)
 
     if req.step_indices:
-        selected_steps = [all_steps[i] for i in req.step_indices if i < len(all_steps)]
+        selected = [done_items[i] for i in req.step_indices if i < len(done_items)]
     else:
-        selected_steps = [s for s in all_steps if s.get("status") == "done"]
+        selected = done_items
 
-    step_data = [{"type": s["type"], "explanation": s.get("llm_explanation", "")}
-                 for s in selected_steps]
+    step_data = [{"type": s["step"]["type"],
+                  "explanation": s["step"].get("llm_explanation", "")}
+                 for s in selected]
 
     agent = get_agent(req.project_id)
 

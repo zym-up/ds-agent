@@ -51,6 +51,36 @@ def test_line_ok(sample_df):
     assert len(result["charts"]) == 1
 
 
+def test_line_columns_fallback(sample_df):
+    """line/scatter 从 columns 中自动推断 x/y"""
+    result = execute_step("eda", {"method": "line", "columns": ["数值A", "数值B"]}, sample_df)
+    assert "错误" not in result["text"]
+    assert len(result["charts"]) == 1
+
+
+def test_multi_line(sample_df):
+    result = execute_step("eda", {"method": "multi_line", "x": "数值A", "columns": ["数值B", "数值C"]}, sample_df)
+    assert "错误" not in result["text"]
+    assert len(result["charts"]) == 2
+
+
+def test_multi_line_columns_fallback(sample_df):
+    """multi_line 从 columns 推断 x，其余列作 y"""
+    result = execute_step("eda", {"method": "multi_line", "columns": ["数值A", "数值B", "数值C"]}, sample_df)
+    assert "错误" not in result["text"]
+    assert len(result["charts"]) == 2  # 数值B和数值C 对 数值A
+
+
+def test_multi_line_pairs(sample_df):
+    """multi_line 用 pairs 指定任意列对"""
+    result = execute_step("eda", {
+        "method": "multi_line",
+        "pairs": [["数值A", "数值B"], ["数值A", "数值C"], ["数值B", "数值C"]]
+    }, sample_df)
+    assert "错误" not in result["text"]
+    assert len(result["charts"]) == 3
+
+
 # ── EDA 其他方法 ──
 def test_correlation(sample_df):
     result = execute_step("eda", {"method": "correlation", "columns": ["数值A", "数值B"]}, sample_df)

@@ -149,7 +149,7 @@ async def execute_analysis_step(req: StepExecuteRequest):
         result = execute_step(step_type, params, df)
 
         explanation = ""
-        if result["metrics"]:
+        if result["metrics"] or result["text"]:
             try:
                 agent = get_agent(req.project_id)
                 agent_step = AnalysisStep(
@@ -157,7 +157,7 @@ async def execute_analysis_step(req: StepExecuteRequest):
                     type=step_type,
                     description=step.get("description", ""),
                 )
-                explanation = agent.explain_result(agent_step, result["metrics"])
+                explanation = agent.explain_result(agent_step, result["metrics"], result["text"])
             except Exception:
                 logger.warning("LLM 解读失败", exc_info=True)
 
@@ -215,7 +215,7 @@ async def execute_analysis_step_stream(req: ExecuteStreamRequest):
         async def generate():
             yield f"data: {json.dumps({'type': 'result', 'text': result['text'], 'chart_count': len(result['charts'])})}\n\n"
 
-            if result["metrics"]:
+            if result["metrics"] or result["text"]:
                 agent = get_agent(req.project_id)
                 agent_step = AnalysisStep(
                     id=req.step_index + 1,
@@ -224,13 +224,13 @@ async def execute_analysis_step_stream(req: ExecuteStreamRequest):
                 )
                 full_explanation = ""
                 try:
-                    for chunk in agent.explain_result_stream(agent_step, result["metrics"]):
+                    for chunk in agent.explain_result_stream(agent_step, result["metrics"], result["text"]):
                         full_explanation += chunk
                         yield f"data: {json.dumps({'type': 'explanation', 'chunk': chunk})}\n\n"
                 except Exception:
                     logger.warning("LLM 流式解读失败，尝试同步", exc_info=True)
                     try:
-                        full_explanation = agent.explain_result(agent_step, result["metrics"])
+                        full_explanation = agent.explain_result(agent_step, result["metrics"], result["text"])
                         yield f"data: {json.dumps({'type': 'explanation', 'chunk': full_explanation})}\n\n"
                     except Exception:
                         logger.warning("LLM 同步解读也失败", exc_info=True)

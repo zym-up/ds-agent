@@ -129,7 +129,7 @@ class AnalysisAgent:
 分析步骤类型（type）及可用原子方法（method）：
 - clean: dedup(去重) / fill_missing(缺失值填充) / detect_outliers(异常值检测) / drop_columns(删除列)
   默认(不填method): 全量清洗流水线
-- eda: correlation(相关性矩阵) / distribution(分布直方图+箱线图) / scatter(散点图, 必须传x和y) / line(折线图, 必须传x和y) / pairplot(配对散点矩阵) / describe(统计摘要,无图)
+- eda: correlation(相关性矩阵) / distribution(分布直方图+箱线图) / scatter(散点图, 必须传x和y) / line(折线图, 必须传x和y) / multi_line(多列折线图, 传x和columns列表, 对每列生成一张折线图) / pairplot(配对散点矩阵) / describe(统计摘要,无图)
   默认(不填method): 全量EDA流水线
 - feature: scale(标准化/归一化) / encode(分类编码) / variance_filter(低方差过滤) / correlation_select(相关性特征选择)
   默认(不填method): 按params子参数执行对应操作
@@ -143,6 +143,7 @@ class AnalysisAgent:
 - correlation: corr_method 选 pearson/spearman, 面料数据推荐 spearman
 - scatter: **必须**传 x 和 y（列名）, 可选 color（分组着色）、trendline（趋势线，默认 true）
 - line: **必须**传 x 和 y（列名）, 可选 group_by（分组折线）
+- multi_line: 两种用法：(1) x+columns — 公共横轴+多个纵轴；(2) pairs — 指定任意列对，如 [[\"拉伸强度\",\"柔软度\"],[\"拉伸强度\",\"撕裂强度\"],[\"柔软度\",\"撕裂强度\"]]。用户说"画指定的几对折线图"时用 pairs
 - distribution: 可选 columns（指定列名列表），不传则自动取前6个数值列
 - scale: scale_method 选 standard/minmax, 树模型不需要标准化, 线性模型需要
 - encode: encode_method 选 onehot/label
@@ -158,12 +159,15 @@ class AnalysisAgent:
 回复格式（严格 JSON）：
 {
   "steps": [
-    {"type": "clean", "description": "...", "params": {}},
-    {"type": "eda", "description": "...", "params": {"columns": [], "method": ""}},
-    {"type": "model", "description": "...", "params": {"target": "", "model_type": ""}}
+    {"type": "clean", "description": "...", "params": {"columns": ["列名1"], "method": "fill_missing"}},
+    {"type": "eda", "description": "...", "params": {"x": "列名X", "y": "列名Y", "method": "scatter", "trendline": true}},
+    {"type": "eda", "description": "...", "params": {"columns": ["列1","列2"], "method": "correlation", "corr_method": "spearman"}},
+    {"type": "model", "description": "...", "params": {"target": "目标列名", "model_type": "random_forest", "method": "importance"}}
   ],
   "explanation": "用通俗语言向工程师解释这个分析计划"
-}"""
+}
+
+重要：scatter 和 line 方法必须传 x 和 y（数据中存在的列名），不能只传 columns！"""
 
     MAX_HISTORY = 20  # 最多保留最近 20 条历史消息（10 轮对话）
 
@@ -240,28 +244,27 @@ class AnalysisAgent:
         except (json.JSONDecodeError, KeyError):
             return AnalysisPlan(steps=[], raw_response=response)
 
-    def _build_explain_messages(self, step, metrics: dict) -> tuple:
+    def _build_explain_messages(self, step, metrics: dict, text_result: str = "") -> tuple:
         """构建结果解释的 messages，返回 (messages, user_content)"""
-        current_msg = f"""请用汽车工程师能理解的语言解释以下分析结果：
-
-步骤类型: {step.type}
-步骤描述: {step.description}
-分析结果: {json.dumps(metrics, ensure_ascii=False)}
-
-请用 3-5 句话解释这些数字的含义，以及它们对工程师意味着什么。"""
+        parts = [f"步骤类型: {step.type}", f"步骤描述: {step.description}"]
+        if text_result:
+            parts.append(f"文本结果:\n{text_result}")
+        if metrics:
+            parts.append(f"数值指标:\n{json.dumps(metrics, ensure_ascii=False)}")
+        current_msg = "\n\n".join(parts) + """\n\n请结合领域知识解读以上结果，按以下结构输出（3-5 句话）：\n1. 结果在工程上意味着什么？对照知识库中的典型范围和先验知识进行判断\n2. 有没有异常或值得注意的偏离？\n3. 对工程师的下一步建议（具体可操作）\n\n要求：面向汽车研发工程师，说人话，不要重复数据本身。"""
         return self._build_messages_with_context(current_msg), current_msg
 
-    def explain_result(self, step: AnalysisStep, metrics: dict) -> str:
+    def explain_result(self, step: AnalysisStep, metrics: dict, text_result: str = "") -> str:
         """用自然语言解释分析结果"""
-        messages, user_msg = self._build_explain_messages(step, metrics)
+        messages, user_msg = self._build_explain_messages(step, metrics, text_result)
         explanation = self.llm.chat(messages)
         self.chat_history.append({"role": "user", "content": user_msg})
         self.chat_history.append({"role": "assistant", "content": explanation})
         return explanation
 
-    def explain_result_stream(self, step, metrics: dict):
+    def explain_result_stream(self, step, metrics: dict, text_result: str = ""):
         """流式解释分析结果，逐 chunk yield 文本"""
-        messages, user_msg = self._build_explain_messages(step, metrics)
+        messages, user_msg = self._build_explain_messages(step, metrics, text_result)
         full_text = ""
         for chunk in self.llm.chat_stream(messages):
             full_text += chunk

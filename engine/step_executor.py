@@ -21,6 +21,30 @@ _MODEL_ALIASES = {
 }
 
 
+def _resolve_xy(params: dict, numeric_cols: list) -> tuple:
+    """从 params 中解析 x/y 列：优先用 x/y 参数，缺一个时从 columns 补全，都没有则从 columns 取前两列"""
+    x = params.get("x")
+    y = params.get("y")
+    if x and y:
+        return x, y
+    cols = params.get("columns")
+    if isinstance(cols, list) and len(cols) >= 2:
+        if x and not y:
+            # 有 x 缺 y：从 columns 中找第一个不为 x 的列作为 y
+            for c in cols:
+                if c != x:
+                    return x, c
+        elif y and not x:
+            # 有 y 缺 x：从 columns 中找第一个不为 y 的列作为 x
+            for c in cols:
+                if c != y:
+                    return c, y
+        else:
+            # 都没有：取 columns 前两列
+            return cols[0], cols[1]
+    return None, None
+
+
 def execute_step(step_type: str, params: dict, df: pd.DataFrame) -> dict:
     """执行单个分析步骤，返回 {charts, text, metrics, result_df}
 
@@ -135,9 +159,9 @@ def _eda(method, params, df):
         return {"charts": figs, "text": text, "metrics": {"列数": len(cols)}}
 
     elif method == "scatter":
-        if not (params.get("x") and params.get("y")):
-            return {"charts": [], "text": "### 散点图\n- 错误: 未指定 x 或 y 轴列", "metrics": {}}
-        x_col, y_col = params["x"], params["y"]
+        x_col, y_col = _resolve_xy(params, numeric_cols)
+        if not x_col or not y_col:
+            return {"charts": [], "text": "### 散点图\n- 错误: 未指定 x 或 y 轴列，请在 params 中传入 x 和 y（或在 columns 中至少放两列）", "metrics": {}}
         if x_col not in df.columns or y_col not in df.columns:
             return {"charts": [], "text": f"### 散点图\n- 错误: 列 '{x_col}' 或 '{y_col}' 不存在", "metrics": {}}
         fig = scatter_plot(df, x=x_col, y=y_col,
@@ -146,9 +170,9 @@ def _eda(method, params, df):
         return {"charts": [fig], "text": text, "metrics": {"x": x_col, "y": y_col}}
 
     elif method == "line":
-        if not (params.get("x") and params.get("y")):
-            return {"charts": [], "text": "### 折线图\n- 错误: 未指定 x 或 y 轴列", "metrics": {}}
-        x_col, y_col = params["x"], params["y"]
+        x_col, y_col = _resolve_xy(params, numeric_cols)
+        if not x_col or not y_col:
+            return {"charts": [], "text": "### 折线图\n- 错误: 未指定 x 或 y 轴列，请在 params 中传入 x 和 y（或在 columns 中至少放两列）", "metrics": {}}
         if x_col not in df.columns or y_col not in df.columns:
             return {"charts": [], "text": f"### 折线图\n- 错误: 列 '{x_col}' 或 '{y_col}' 不存在", "metrics": {}}
         fig = line_plot(df, x=x_col, y=y_col, group_by=params.get("group_by"))
@@ -156,6 +180,37 @@ def _eda(method, params, df):
         if params.get("group_by"):
             text += f" (按 {params['group_by']} 分组)"
         return {"charts": [fig], "text": text, "metrics": {"x": x_col, "y": y_col}}
+
+    elif method == "multi_line":
+        # 支持两种模式：
+        # 1. pairs 模式：[[x1,y1], [x2,y2], ...] — 指定任意列对
+        # 2. x + columns 模式：公共 x 轴，对每个 y 列生成一张折线图
+        pairs = params.get("pairs")
+        if pairs and isinstance(pairs, list) and all(isinstance(p, list) and len(p) >= 2 for p in pairs):
+            figs = []
+            labels = []
+            for p in pairs:
+                xc, yc = p[0], p[1]
+                if xc in df.columns and yc in df.columns:
+                    figs.append(line_plot(df, x=xc, y=yc, group_by=params.get("group_by")))
+                    labels.append(f"{yc} vs {xc}")
+            if not figs:
+                return {"charts": [], "text": "### 多列折线图\n- 错误: 指定的列对均无效", "metrics": {}}
+            text = f"### 多列折线图\n- {', '.join(labels)}"
+            return {"charts": figs, "text": text, "metrics": {"列对数": len(figs)}}
+
+        x_col, first_y = _resolve_xy(params, numeric_cols)
+        y_cols = params.get("columns") or ([first_y] if first_y else [])
+        if not x_col or not y_cols:
+            return {"charts": [], "text": "### 多列折线图\n- 错误: 请指定 pairs（列对列表）或 x+columns（公共横轴+纵轴列表）", "metrics": {}}
+        figs = []
+        for yc in y_cols:
+            if yc in df.columns and yc != x_col:
+                figs.append(line_plot(df, x=x_col, y=yc, group_by=params.get("group_by")))
+        if not figs:
+            return {"charts": [], "text": "### 多列折线图\n- 错误: 没有有效的纵轴列", "metrics": {}}
+        text = f"### 多列折线图\n- 横轴: {x_col}\n- 纵轴: {', '.join(y_cols[:10])}"
+        return {"charts": figs, "text": text, "metrics": {"横轴": x_col, "纵轴列数": len(y_cols)}}
 
     elif method == "pairplot":
         cols = numeric_cols[:6] if len(numeric_cols) > 6 else numeric_cols
